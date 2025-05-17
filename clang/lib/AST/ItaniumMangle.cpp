@@ -4933,6 +4933,7 @@ recurse:
   case Expr::SourceLocExprClass:
   case Expr::EmbedExprClass:
   case Expr::BuiltinBitCastExprClass:
+  case Expr::CXXMoovExprClass:
   {
     NotPrimaryExpr();
     if (!NullOut) {

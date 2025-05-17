@@ -7001,6 +7001,8 @@ public:
                            ParsedType &Ty, SourceLocation RParenLoc,
                            Expr *CastExpr);
 
+  ExprResult ActOnMoovExpr(SourceLocation MoovLoc, Expr *SubExpr);
+
   /// Prepares for a scalar cast, performing all the necessary stages
   /// except the final cast and returning the kind required.
   CastKind PrepareScalarCast(ExprResult &src, QualType destType);

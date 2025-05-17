@@ -2041,6 +2041,10 @@ void StmtPrinter::VisitCXXOperatorCallExpr(CXXOperatorCallExpr *Node) {
   }
 }
 
+void StmtPrinter::VisitCXXMoovExpr(CXXMoovExpr *Node) {
+  // TODO
+}
+
 void StmtPrinter::VisitCXXMemberCallExpr(CXXMemberCallExpr *Node) {
   // If we have a conversion operator call only print the argument.
   CXXMethodDecl *MD = Node->getMethodDecl();

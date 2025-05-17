@@ -13353,6 +13353,12 @@ TreeTransform<Derived>::TransformBinaryOperator(BinaryOperator *E) {
 }
 
 template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformCXXMoovExpr(CXXMoovExpr *E) {
+  // TODO
+  return ExprError();
+}
+
+template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformCXXRewrittenBinaryOperator(
     CXXRewrittenBinaryOperator *E) {
   CXXRewrittenBinaryOperator::DecomposedForm Decomp = E->getDecomposedForm();

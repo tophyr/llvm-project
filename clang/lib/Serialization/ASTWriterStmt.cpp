@@ -1649,6 +1649,10 @@ void ASTStmtWriter::VisitObjCAvailabilityCheckExpr(ObjCAvailabilityCheckExpr *E)
 // C++ Expressions and Statements.
 //===----------------------------------------------------------------------===//
 
+void ASTStmtWriter::VisitCXXMoovExpr(CXXMoovExpr *S) {
+  // TODO
+}
+
 void ASTStmtWriter::VisitCXXCatchStmt(CXXCatchStmt *S) {
   VisitStmt(S);
   Record.AddSourceLocation(S->getCatchLoc());
