@@ -3736,6 +3736,9 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
         return true;
     break;
 
+  case CXXMoovExprClass:
+    return true;
+
   case ParenExprClass:
   case ArraySubscriptExprClass:
   case MatrixSubscriptExprClass:

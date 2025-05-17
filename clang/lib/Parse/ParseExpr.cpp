@@ -1135,6 +1135,14 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     break;
   }
 
+  case tok::kw_moov: {
+    SourceLocation MoovLoc = ConsumeToken();
+    ExprResult Operand = ParseCastExpression(AnyCastExpr, NotTypeCast);
+    if (Operand.isInvalid())
+      return Operand;
+    return Actions.ActOnMoovExpr(MoovLoc, Operand.get());
+  }
+
     // primary-expression
   case tok::numeric_constant:
   case tok::binary_data:
