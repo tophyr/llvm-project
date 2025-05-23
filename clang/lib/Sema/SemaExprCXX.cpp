@@ -9617,48 +9617,13 @@ ExprResult Sema::ActOnMoovExpr(SourceLocation MoovLoc, Expr *Operand) {
       return ExprError();  // propagate error if placeholder resolution fails
   }
 
-  // 2. Determine if the expression is type-dependent or value-dependent
   QualType SrcType = SubExpr.get()->getType();
-  bool Dependent = SrcType->isDependentType() || SubExpr.get()->isTypeDependent() 
-                   || SubExpr.get()->isValueDependent();
-  if (Dependent) {
-    // **Dependent case**: Create a CXXMoovExpr that defers actual casting.
-    // Compute the dependent rvalue reference type T&& (remains dependent).
-    QualType ValueType = SrcType;
-    if (ValueType->isReferenceType())  // strip existing ref, if any
-      ValueType = ValueType->getPointeeType();
-    QualType DependentRRefType = Context.getRValueReferenceType(ValueType);
-    assert(DependentRRefType->isDependentType() && "T&& should be dependent here");
-
-    // Construct a new CXXMoovExpr node. This is a subclass of Expr that we assume 
-    // has been defined to hold the operand and defer the cast.
-    // It should be constructed with the dependent T&& type and XValue value kind 
-    // (rvalue reference yields an xvalue).
-    CXXMoovExpr *ME = new (Context) CXXMoovExpr(DependentRRefType, SubExpr.get(), MoovLoc);
-    // Mark expression as type-dependent/value-dependent (if not done in constructor)
-    return ExprResult(ME);
-  }
-
-  // 3. Non-dependent case: build an explicit static cast to T&&.
-  // Determine the target rvalue reference type (T &&).
-  QualType ValueType = SrcType;
-  if (ValueType->isReferenceType())
+  if (ValueType->isReferenceType())  // strip existing ref, if any
     ValueType = ValueType->getPointeeType();
-  QualType RRefType = Context.getRValueReferenceType(ValueType);
-  // (No dependence here, RRefType is a concrete type like int&& or MyClass&&.)
 
-  // Create TypeSourceInfo for the deduced RRefType.
-  TypeSourceInfo *TInfo = Context.getTrivialTypeSourceInfo(RRefType, MoovLoc);
-
-  // Use Clang's built-in static_cast builder to perform semantic checks and create the AST node.
-  ExprResult CastResult = BuildCXXNamedCast(MoovLoc, tok::kw_static_cast,
-                                           TInfo, SubExpr.get(),
-                                           SourceRange(),
-                                           SourceRange());
-  if (CastResult.isInvalid())
-    return ExprError();  // (Any errors would already have been reported by BuildCXXNamedCast)
-  
-  // CastResult is now a CXXStaticCastExpr* that casts Operand to T&&.
-  return CastResult;
+  // Construct a new CXXMoovExpr node. This is a subclass of Expr that we assume 
+  // has been defined to hold the operand and defer the cast.
+  CXXMoovExpr *ME = new (Context) CXXMoovExpr(Context.getRValueReferenceType(ValueType), SubExpr.get(), MoovLoc);
+  return ExprResult(ME);
 }
 
