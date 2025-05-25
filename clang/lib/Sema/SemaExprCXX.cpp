@@ -9618,12 +9618,8 @@ ExprResult Sema::ActOnMoovExpr(SourceLocation MoovLoc, Expr *Operand) {
   }
 
   QualType SrcType = SubExpr.get()->getType();
-  if (ValueType->isReferenceType())  // strip existing ref, if any
-    ValueType = ValueType->getPointeeType();
+  if (SrcType->isReferenceType())  // strip existing ref, if any
+    SrcType = SrcType->getPointeeType();
 
-  // Construct a new CXXMoovExpr node. This is a subclass of Expr that we assume 
-  // has been defined to hold the operand and defer the cast.
-  CXXMoovExpr *ME = new (Context) CXXMoovExpr(Context.getRValueReferenceType(ValueType), SubExpr.get(), MoovLoc);
-  return ExprResult(ME);
+  return ExprResult{new (Context) CXXMoovExpr{Context.getRValueReferenceType(SrcType), SubExpr.get(), MoovLoc}};
 }
-

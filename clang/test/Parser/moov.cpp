@@ -7,5 +7,5 @@ void test() {
   moov s;                  // expected-no-error
   S x = moov s;            // expected-no-error
   S y = moov(s);           // expected-no-error
-  moov 17;                 // expected-error {{foo bar}}
+  moov 17;                 // expected-error {{moov operand cannot be a constant}}
 }
