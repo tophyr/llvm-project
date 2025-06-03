@@ -68,6 +68,15 @@ def warn_comma_operator : Warning<"possible misuse of comma operator here">,
 def note_cast_to_void : Note<"cast expression to void to silence warning">;
 def note_cast_operand_to_int : Note<"cast one or both operands to int to silence this warning">;
 
+def err_disclaim_local_var : Error<
+  "can only disclaim local variables">;
+def err_disclaim_same_scope : Error<
+  "cannot disclaim a variable not defined in the same scope">;
+def err_disclaim_automatic_duration_only : Error<
+  "can only disclaim variables with automatic duration; no globals or local-statics">;
+def err_disclaim_no_captures : Error<
+  "cannot disclaim lambda captures">;
+
 // Constant expressions
 def err_expr_not_ice : Error<
   "expression is not an %select{integer|integral}0 constant expression">;

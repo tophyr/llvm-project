@@ -9605,3 +9605,42 @@ ExprResult Sema::ActOnRequiresExpr(
     return ExprError();
   return RE;
 }
+
+ExprResult Sema::ActOnDisclaimExpr(SourceLocation DisclaimLoc, Expr *Operand) {
+  assert(Operand && "disclaim operand cannot be null");
+
+  Expr *E = Operand->IgnoreParenImpCasts();
+
+  auto *DRE = dyn_cast<DeclRefExpr>(E);
+  if (!DRE || !isa<VarDecl>(DRE->getDecl())) {
+    return Diag(E->getExprLoc(), diag::err_disclaim_local_var)
+            << E->getSourceRange();
+  }
+
+  if (DRE->refersToEnclosingVariableOrCapture()) {
+    return Diag(E->getExprLoc(), diag::err_disclaim_no_captures)
+           << E->getSourceRange();
+  }
+
+  VarDecl *VD = cast<VarDecl>(DRE->getDecl());
+
+  // Forbid global/static/local-static
+  if (VD->hasGlobalStorage() || VD->isStaticLocal()) {
+    return Diag(E->getExprLoc(), diag::err_disclaim_automatic_duration_only)
+            << E->getSourceRange();
+  }
+
+  // reject variables from outer contexts
+  if (!CurScope->isDeclScope(VD)) {
+    return Diag(E->getExprLoc(), diag::err_disclaim_same_scope)
+            << E->getSourceRange();
+  }
+
+  QualType SrcType = Operand->getType();
+  if (SrcType->isReferenceType()) {
+    // strip existing ref, if any
+    SrcType = SrcType->getPointeeType();
+  }
+
+  return ExprResult{new (Context) CXXDisclaimExpr{SrcType.getNonReferenceType(), Operand, DisclaimLoc}};
+}

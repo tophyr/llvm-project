@@ -2478,6 +2478,8 @@ DEF_TRAVERSE_STMT(MSDependentExistsStmt, {
   TRY_TO(TraverseDeclarationNameInfo(S->getNameInfo()));
 })
 
+DEF_TRAVERSE_STMT(CXXDisclaimExpr, {})
+
 DEF_TRAVERSE_STMT(ReturnStmt, {})
 DEF_TRAVERSE_STMT(SwitchStmt, {})
 DEF_TRAVERSE_STMT(WhileStmt, {})

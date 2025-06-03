@@ -1051,6 +1051,10 @@ void ASTStmtReader::VisitCXXMemberCallExpr(CXXMemberCallExpr *E) {
   VisitCallExpr(E);
 }
 
+void ASTStmtReader::VisitCXXDisclaimExpr(CXXDisclaimExpr *E) {
+  // TODO
+}
+
 void ASTStmtReader::VisitMemberExpr(MemberExpr *E) {
   VisitExpr(E);
 

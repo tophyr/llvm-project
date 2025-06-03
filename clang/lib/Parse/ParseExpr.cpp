@@ -1135,6 +1135,14 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     break;
   }
 
+  case tok::kw_disclaim: {
+    SourceLocation DisclaimLoc = ConsumeToken();
+    ExprResult Operand = ParseCastExpression(AnyCastExpr, NotTypeCast);
+    if (Operand.isInvalid())
+      return Operand;
+    return Actions.ActOnDisclaimExpr(DisclaimLoc, Operand.get());
+  }
+
     // primary-expression
   case tok::numeric_constant:
   case tok::binary_data:

@@ -352,6 +352,10 @@ void StmtProfiler::VisitMSAsmStmt(const MSAsmStmt *S) {
   VisitStmt(S);
 }
 
+void StmtProfiler::VisitCXXDisclaimExpr(const CXXDisclaimExpr *E) {
+  // TODO
+}
+
 void StmtProfiler::VisitCXXCatchStmt(const CXXCatchStmt *S) {
   VisitStmt(S);
   VisitType(S->getCaughtType());

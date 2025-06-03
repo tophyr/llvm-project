@@ -1723,6 +1723,7 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::CXXTypeidExprClass:
     case Stmt::CXXUuidofExprClass:
     case Stmt::CXXFoldExprClass:
+    case Stmt::CXXDisclaimExprClass: // TODO
     case Stmt::MSPropertyRefExprClass:
     case Stmt::MSPropertySubscriptExprClass:
     case Stmt::CXXUnresolvedConstructExprClass:

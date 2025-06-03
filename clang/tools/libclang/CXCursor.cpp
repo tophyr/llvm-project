@@ -173,6 +173,9 @@ CXCursor cxcursor::MakeCXCursor(const Stmt *S, const Decl *Parent,
   CXCursorKind K = CXCursor_NotImplemented;
 
   switch (S->getStmtClass()) {
+  case Stmt::CXXDisclaimExprClass:
+    break; // TODO
+
   case Stmt::NoStmtClass:
     break;
 

@@ -13353,6 +13353,16 @@ TreeTransform<Derived>::TransformBinaryOperator(BinaryOperator *E) {
 }
 
 template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformCXXDisclaimExpr(CXXDisclaimExpr *E) {
+  ExprResult Sub = getDerived().TransformExpr(E->getSubExpr());
+  if (Sub.isInvalid()) {
+    return ExprError();
+  }
+
+  return new (getSema().getASTContext()) CXXDisclaimExpr(E->getType(), Sub.get(), E->getBeginLoc());
+}
+
+template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformCXXRewrittenBinaryOperator(
     CXXRewrittenBinaryOperator *E) {
   CXXRewrittenBinaryOperator::DecomposedForm Decomp = E->getDecomposedForm();

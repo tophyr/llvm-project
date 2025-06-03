@@ -65,6 +65,35 @@ class TemplateParameterList;
 // C++ Expressions.
 //===--------------------------------------------------------------------===//
 
+class CXXDisclaimExpr : public Expr {
+  Stmt *SubExpr;
+  SourceLocation DisclaimLoc;
+
+public:
+  CXXDisclaimExpr(QualType Ty, Expr *SubExpr, SourceLocation DisclaimLoc)
+      : Expr{CXXDisclaimExprClass, Ty, VK_XValue, SubExpr->getObjectKind()},
+        SubExpr(SubExpr), DisclaimLoc(DisclaimLoc) {
+          setDependence(SubExpr->getDependence());
+        }
+
+  Expr *getSubExpr() const { return cast<Expr>(SubExpr); }
+  SourceLocation getDisclaimLoc() const { return DisclaimLoc; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXDisclaimExprClass;
+  }
+
+  SourceLocation getKeywordLoc() const { return DisclaimLoc; }
+
+  SourceLocation getBeginLoc() const LLVM_READONLY { return DisclaimLoc; }
+
+  SourceLocation getEndLoc() const LLVM_READONLY {
+    return SubExpr->getEndLoc();
+  }
+
+  child_range children() { return child_range(&SubExpr, &SubExpr + 1); }
+};
+
 /// A call to an overloaded operator written using operator
 /// syntax.
 ///
