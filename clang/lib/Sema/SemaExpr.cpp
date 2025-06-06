@@ -406,6 +406,13 @@ bool Sema::DiagnoseUseOfDecl(NamedDecl *D, ArrayRef<SourceLocation> Locs,
     return true;
   }
 
+  if (const auto *VD = dyn_cast<VarDecl>(D)) {
+    if (VD->isDisclaimed()) {
+      Diag(Loc, diag::err_disclaim_var_used) << D->getName();
+      Diag(VD->getDisclaimSite()->getBeginLoc(), diag::note_disclaim_location);
+    }
+  }
+
   return false;
 }
 

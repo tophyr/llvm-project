@@ -9642,5 +9642,9 @@ ExprResult Sema::ActOnDisclaimExpr(SourceLocation DisclaimLoc, Expr *Operand) {
     SrcType = SrcType->getPointeeType();
   }
 
-  return ExprResult{new (Context) CXXDisclaimExpr{SrcType.getNonReferenceType(), Operand, DisclaimLoc}};
+  auto Disclaim = new (Context) CXXDisclaimExpr{SrcType.getNonReferenceType(), Operand, DisclaimLoc};
+
+  VD->setDisclaimSite(Disclaim);
+
+  return ExprResult{Disclaim};
 }

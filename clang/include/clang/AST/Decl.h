@@ -880,6 +880,20 @@ struct EvaluatedStmt {
 
 /// Represents a variable declaration or definition.
 class VarDecl : public DeclaratorDecl, public Redeclarable<VarDecl> {
+  Expr* DisclaimSite{};
+public:
+  bool isDisclaimed() const {
+    return getDisclaimSite() != nullptr;
+  }
+
+  Expr* getDisclaimSite() const {
+    return DisclaimSite;
+  }
+
+  void setDisclaimSite(Expr* D) {
+    DisclaimSite = D;
+  }
+
 public:
   /// Initialization styles.
   enum InitializationStyle {

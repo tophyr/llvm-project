@@ -76,6 +76,9 @@ def err_disclaim_automatic_duration_only : Error<
   "can only disclaim variables with automatic duration; no globals or local-statics">;
 def err_disclaim_no_captures : Error<
   "cannot disclaim lambda captures">;
+def err_disclaim_var_used : Error<
+  "use of disclaimed identifier '%0'">;
+def note_disclaim_location : Note<"disclaimed here">;
 
 // Constant expressions
 def err_expr_not_ice : Error<

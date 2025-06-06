@@ -130,3 +130,9 @@ void testArrayMember() {
   int arr[2];
   disclaim arr[0];              // expected-error {{can only disclaim local variables}}
 }
+
+void testUseAfterDisclaim() {
+  MoveOnly a{42};
+  auto b = disclaim a;          // expected-note {{disclaimed here}}
+  b.val_ += a.val_;             // expected-error {{use of disclaimed identifier 'a'}}
+}
