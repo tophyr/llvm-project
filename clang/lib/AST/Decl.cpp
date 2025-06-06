@@ -2810,6 +2810,8 @@ bool VarDecl::isKnownToBeDefined() const {
 }
 
 bool VarDecl::isNoDestroy(const ASTContext &Ctx) const {
+  if (isDisclaimed())
+    return true;
   if (!hasGlobalStorage())
     return false;
   if (hasAttr<NoDestroyAttr>())
