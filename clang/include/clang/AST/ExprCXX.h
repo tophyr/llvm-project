@@ -71,7 +71,7 @@ class CXXDisclaimExpr : public Expr {
 
 public:
   CXXDisclaimExpr(QualType Ty, Expr *SubExpr, SourceLocation DisclaimLoc)
-      : Expr{CXXDisclaimExprClass, Ty, VK_XValue, SubExpr->getObjectKind()},
+      : Expr{CXXDisclaimExprClass, Ty, VK_PRValue, OK_Ordinary},
         SubExpr(SubExpr), DisclaimLoc(DisclaimLoc) {
           setDependence(SubExpr->getDependence());
         }
