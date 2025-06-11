@@ -241,6 +241,9 @@ public:
   void VisitPackIndexingExpr(PackIndexingExpr *E) {
     Visit(E->getSelectedExpr());
   }
+  void VisitCXXDisclaimExpr(CXXDisclaimExpr *E) {
+    Visit(E->getSubExpr());
+  }
 };
 }  // end anonymous namespace.
 

@@ -9646,5 +9646,5 @@ ExprResult Sema::ActOnDisclaimExpr(SourceLocation DisclaimLoc, Expr *Operand) {
 
   VD->setDisclaimSite(Disclaim);
 
-  return ExprResult{Disclaim};
+  return MaybeBindToTemporary(Disclaim);
 }
