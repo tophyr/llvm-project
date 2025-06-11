@@ -9625,7 +9625,7 @@ ExprResult Sema::ActOnDisclaimExpr(SourceLocation DisclaimLoc, Expr *Operand) {
   VarDecl *VD = cast<VarDecl>(DRE->getDecl());
 
   // Forbid global/static/local-static
-  if (VD->hasGlobalStorage() || VD->isStaticLocal()) {
+  if (VD->hasGlobalStorage() || VD->isStaticLocal() || VD->isConstexpr()) {
     return Diag(E->getExprLoc(), diag::err_disclaim_automatic_duration_only)
             << E->getSourceRange();
   }

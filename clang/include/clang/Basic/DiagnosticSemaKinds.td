@@ -73,7 +73,7 @@ def err_disclaim_local_var : Error<
 def err_disclaim_same_scope : Error<
   "cannot disclaim a variable not defined in the same scope">;
 def err_disclaim_automatic_duration_only : Error<
-  "can only disclaim variables with automatic duration; no globals or local-statics">;
+  "can only disclaim variables with automatic duration; no globals, local-statics or constexpr">;
 def err_disclaim_no_captures : Error<
   "cannot disclaim lambda captures">;
 def err_disclaim_var_used : Error<

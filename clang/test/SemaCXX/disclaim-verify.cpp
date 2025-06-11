@@ -30,11 +30,11 @@ void testNonLValues() {
 }
 
 void testLocals() {
-  int a = 42;
-  constexpr int b = 64;
+  constexpr int a = 42;
+  const int b = a + 22;
   MoveOnly c{123};
 
-  auto _a = disclaim a;
+  auto _a = disclaim a;         // expected-error {{can only disclaim variables with automatic duration; no globals, local-statics or constexpr}}
   auto _b = disclaim b;
   auto _c = disclaim c;
 }
@@ -67,13 +67,13 @@ void testWrongScope() {
 
 void testLocalStatic() {
   static int a = 42;
-  disclaim a;                   // expected-error {{can only disclaim variables with automatic duration; no globals or local-statics}}
+  disclaim a;                   // expected-error {{can only disclaim variables with automatic duration; no globals, local-statics or constexpr}}
 }
 
 namespace testGlobal {
 
 int g_a = 42;
-int g_b = disclaim g_a;         // expected-error {{can only disclaim variables with automatic duration; no globals or local-statics}}
+int g_b = disclaim g_a;         // expected-error {{can only disclaim variables with automatic duration; no globals, local-statics or constexpr}}
 
 }
 
