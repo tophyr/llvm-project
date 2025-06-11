@@ -136,3 +136,15 @@ void testUseAfterDisclaim() {
   auto b = disclaim a;          // expected-note {{disclaimed here}}
   b.val_ += a.val_;             // expected-error {{use of disclaimed identifier 'a'}}
 }
+
+void testUnsequencedUse1() {
+  int a = 42;
+  auto l = [](int x, int y) {};
+  l(a, disclaim a);             // expected-error {{cannot use 'a' and disclaim it in the same expression}} expected-note {{disclaimed here}}
+}
+
+void testUnsequencedUse2() {
+  int a = 42;
+  auto l = [](int x, int y) {};
+  l(disclaim a, a);             // expected-error {{cannot use 'a' and disclaim it in the same expression}} expected-error {{use of disclaimed identifier 'a'}} expected-note {{disclaimed here}} expected-note {{disclaimed here}}
+}

@@ -13047,8 +13047,38 @@ void Sema::CheckCompletedExpr(Expr *E, SourceLocation CheckLoc,
   llvm::SaveAndRestore ConstantContext(isConstantEvaluatedOverride,
                                        IsConstexpr || isa<ConstantExpr>(E));
   CheckImplicitConversions(E, CheckLoc);
-  if (!E->isInstantiationDependent())
+  if (!E->isInstantiationDependent()) {
     CheckUnsequencedOperations(E);
+
+    // TODO: move this into CheckUnsequencedOperations eventually
+    SmallVector<const Expr *, 8> WorkList;
+    llvm::DenseMap<const VarDecl *, const CXXDisclaimExpr *> DisclaimedVars;
+    llvm::DenseMap<const VarDecl *, const DeclRefExpr *> ReferencedVars;
+
+    WorkList.push_back(E);
+    while (!WorkList.empty()) {
+      const Expr *Item = WorkList.pop_back_val();
+      if (auto *DE = dyn_cast<CXXDisclaimExpr>(Item)) {
+        DisclaimedVars.insert({cast<VarDecl>(cast<DeclRefExpr>(DE->getSubExpr()->IgnoreParenImpCasts())->getDecl()), DE});
+      } else if (auto *DRE = dyn_cast<DeclRefExpr>(Item); DRE && isa<VarDecl>(DRE->getDecl())) {
+        ReferencedVars.insert({cast<VarDecl>(DRE->getDecl()), DRE});
+      } else {
+        for (auto *child : Item->children()) {
+          if (auto *CE = dyn_cast_or_null<Expr>(child)) {
+            WorkList.push_back(CE);
+          }
+        }
+      }
+    }
+
+    for (auto& [Var, Disclaim] : DisclaimedVars) {
+      auto ReferencedIt = ReferencedVars.find(Var);
+      if (ReferencedIt != ReferencedVars.end()) {
+        Diag(ReferencedIt->getSecond()->getBeginLoc(), diag::err_disclaim_and_use_same_expression) << Var;
+        Diag(Disclaim->getBeginLoc(), diag::note_disclaim_location);
+      }
+    }
+  }
   if (!IsConstexpr && !E->isValueDependent())
     CheckForIntOverflow(E);
   DiagnoseMisalignedMembers();

@@ -79,6 +79,8 @@ def err_disclaim_no_captures : Error<
 def err_disclaim_var_used : Error<
   "use of disclaimed identifier '%0'">;
 def note_disclaim_location : Note<"disclaimed here">;
+def err_disclaim_and_use_same_expression : Error<
+  "cannot use %0 and disclaim it in the same expression">;
 
 // Constant expressions
 def err_expr_not_ice : Error<
