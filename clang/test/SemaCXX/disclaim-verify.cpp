@@ -218,7 +218,7 @@ void testTryCatch() {
   }
 }
 
-void testDefaultArgument(int x = disclaim x) {}  // expected-error {{disclaim not allowed in default argument}}
+void testDefaultArgument(int x = disclaim x) {}  // expected-error {{default argument references parameter 'x'}}
 
 void testMultiDecl() {
   MoveOnly a{1}, b{2};
