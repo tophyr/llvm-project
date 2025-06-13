@@ -222,7 +222,8 @@ void testDefaultArgument(int x = disclaim x) {}  // expected-error {{default arg
 
 void testMultiDecl() {
   MoveOnly a{1}, b{2};
-  disclaim a, b;
+  // TODO: this should give a different warning than "has no effect" because it does have an effect, it disclaims a
+  disclaim a, b;                // expected-warning {{left operand of comma operator has no effect}} expected-warning {{expression result unused}}
 }
 
 void testDecltypeAuto() {
