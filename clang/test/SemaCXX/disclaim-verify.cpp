@@ -169,7 +169,7 @@ void testStructuredBindings() {
     MoveOnly y;
   } s{42, 64};
   auto [a, b] = disclaim s;
-  disclaim a;
+  disclaim a;                   // expected-error {{can only disclaim local variables}}
 }
 
 template<typename T>
