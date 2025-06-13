@@ -9624,7 +9624,7 @@ ExprResult Sema::ActOnDisclaimExpr(SourceLocation DisclaimLoc, Expr *Operand) {
 
   VarDecl *VD = cast<VarDecl>(DRE->getDecl());
 
-  // Forbid global/static/local-static
+  // Forbid global/local-static/constexpr
   if (VD->hasGlobalStorage() || VD->isStaticLocal() || VD->isConstexpr()) {
     return Diag(E->getExprLoc(), diag::err_disclaim_automatic_duration_only)
             << E->getSourceRange();
@@ -9636,13 +9636,12 @@ ExprResult Sema::ActOnDisclaimExpr(SourceLocation DisclaimLoc, Expr *Operand) {
             << E->getSourceRange();
   }
 
-  QualType SrcType = Operand->getType();
+  QualType SrcType = VD->getType();
   if (SrcType->isReferenceType()) {
-    // strip existing ref, if any
-    SrcType = SrcType->getPointeeType();
+    return Diag(E->getExprLoc(), diag::err_disclaim_no_references) << E->getSourceRange();
   }
 
-  auto Disclaim = new (Context) CXXDisclaimExpr{SrcType.getNonReferenceType(), Operand, DisclaimLoc};
+  auto *Disclaim = new (Context) CXXDisclaimExpr{SrcType, Operand, DisclaimLoc};
 
   VD->setDisclaimSite(Disclaim);
 
