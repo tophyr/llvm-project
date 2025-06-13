@@ -1,7 +1,7 @@
 // RUN: %clang_cc1 -fsyntax-only -verify %s
 
 struct MoveOnly {
-  MoveOnly(int val)
+  constexpr MoveOnly(int val)
     : val_{val} {}
   MoveOnly(MoveOnly&&) = default;
   MoveOnly& operator=(MoveOnly&&) = default;
@@ -148,3 +148,16 @@ void testUnsequencedUse2() {
   auto l = [](int x, int y) {};
   l(disclaim a, a);             // expected-error {{cannot use 'a' and disclaim it in the same expression}} expected-error {{use of disclaimed identifier 'a'}} expected-note {{disclaimed here}} expected-note {{disclaimed here}}
 }
+
+void testCannotUseInStaticAssert() {
+  bool a{};
+  static_assert(disclaim a);    // expected-error {{static assertion expression is not an integral constant expression}}
+}
+
+constexpr bool testCanUseConstexprly(int val) {
+  MoveOnly a{val};
+  auto b = disclaim a;
+  return b.val_ % 2 == 0;
+}
+static_assert(testCanUseConstexprly(4));
+static_assert(!testCanUseConstexprly(5));

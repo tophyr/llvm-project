@@ -8022,6 +8022,10 @@ public:
     return Error(E);
   }
 
+  bool VisitCXXDisclaimExpr(const CXXDisclaimExpr *E) {
+    return StmtVisitorTy::Visit(E->getSubExpr());
+  }
+
   bool VisitEmbedExpr(const EmbedExpr *E) {
     const auto It = E->begin();
     return StmtVisitorTy::Visit(*It);
@@ -10570,6 +10574,7 @@ namespace {
       return handleCallExpr(E, Result, &This);
     }
     bool VisitCastExpr(const CastExpr *E);
+    bool VisitDeclRefExpr(const DeclRefExpr *E);
     bool VisitInitListExpr(const InitListExpr *E);
     bool VisitCXXConstructExpr(const CXXConstructExpr *E) {
       return VisitCXXConstructExpr(E, E->getType());
@@ -10696,6 +10701,31 @@ bool RecordExprEvaluator::VisitCastExpr(const CastExpr *E) {
   }
   }
 }
+
+bool RecordExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
+  const auto *VD = dyn_cast<VarDecl>(E->getDecl());
+  if (!VD || !VD->hasLocalStorage())
+    return Error(E);
+
+  if (!Info.CurrentCall)
+    return Error(E);
+
+  CallStackFrame *Frame = Info.CurrentCall;
+  unsigned Version = Frame->getCurrentTemporaryVersion(VD);
+
+  APValue *Value = Frame->getTemporary(VD, Version);
+
+  if (!Value || !Value->hasValue()) {
+    if (!VD->hasInit())
+      return Error(E);
+
+    if (!evaluateVarDeclInit(Info, E, VD, Frame, Version, Value))
+      return false;
+  }
+
+  return Success(*Value, E);
+}
+
 
 bool RecordExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
   if (E->isTransparent())
