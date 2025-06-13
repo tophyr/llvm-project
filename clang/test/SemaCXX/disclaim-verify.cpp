@@ -207,7 +207,7 @@ void testInitList() {
 
 void testDecltype() {
   MoveOnly a{42};
-  decltype(disclaim a) b = MoveOnly{7}; // expected-error {{disclaim used in unevaluated context}}
+  decltype(disclaim a) b = MoveOnly{7}; // expected-error {{'disclaim' keyword not allowed in unevaluated contexts}}
 }
 
 void testTryCatch() {

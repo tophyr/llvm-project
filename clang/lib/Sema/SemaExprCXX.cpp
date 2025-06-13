@@ -9609,6 +9609,9 @@ ExprResult Sema::ActOnRequiresExpr(
 ExprResult Sema::ActOnDisclaimExpr(SourceLocation DisclaimLoc, Expr *Operand) {
   assert(Operand && "disclaim operand cannot be null");
 
+  if (isUnevaluatedContext())
+    return Diag(DisclaimLoc, diag::err_disclaim_no_unevaluated);
+
   Expr *E = Operand->IgnoreParenImpCasts();
 
   auto *DRE = dyn_cast<DeclRefExpr>(E);

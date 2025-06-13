@@ -78,6 +78,8 @@ def err_disclaim_no_captures : Error<
   "cannot disclaim lambda captures">;
 def err_disclaim_no_references : Error<
   "cannot disclaim references">;
+def err_disclaim_no_unevaluated : Error<
+  "'disclaim' keyword not allowed in unevaluated contexts">;
 def err_disclaim_var_used : Error<
   "use of disclaimed identifier '%0'">;
 def note_disclaim_location : Note<"disclaimed here">;
