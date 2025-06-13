@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fsyntax-only -verify %s
+// RUN: %clang_cc1 -fexceptions -fcxx-exceptions -fsyntax-only -verify %s
 
 struct MoveOnly {
   constexpr MoveOnly(int val)
@@ -213,7 +213,7 @@ void testDecltype() {
 void testTryCatch() {
   try {
     MoveOnly a{42};
-    throw disclaim a;          // verify `disclaim` works in throw context
+    throw disclaim a;
   } catch (MoveOnly& m) {
   }
 }
