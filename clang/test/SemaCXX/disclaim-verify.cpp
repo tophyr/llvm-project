@@ -1,7 +1,7 @@
 // RUN: %clang_cc1 -fsyntax-only -verify %s
 
 struct MoveOnly {
-  MoveOnly(int val)
+  constexpr MoveOnly(int val)
     : val_{val} {}
   MoveOnly(MoveOnly&&) = default;
   MoveOnly& operator=(MoveOnly&&) = default;
@@ -147,4 +147,99 @@ void testUnsequencedUse2() {
   int a = 42;
   auto l = [](int x, int y) {};
   l(disclaim a, a);             // expected-error {{cannot use 'a' and disclaim it in the same expression}} expected-error {{use of disclaimed identifier 'a'}} expected-note {{disclaimed here}} expected-note {{disclaimed here}}
+}
+
+void testCannotUseInStaticAssert() {
+  bool a{};
+  static_assert(disclaim a);    // expected-error {{static assertion expression is not an integral constant expression}}
+}
+
+// TODO: make this work in constexpr
+// constexpr bool testCanUseConstexprly(int val) {
+//   MoveOnly a{42};
+//   auto b = disclaim a;
+//   return b.val_ % 2 == 0;
+// }
+// static_assert(testCanUseConstexprly(4));
+// static_assert(!testCanUseConstexprly(5));
+
+void testStructuredBindings() {
+  struct S {
+    MoveOnly x;
+    MoveOnly y;
+  } s{42, 64};
+  auto [a, b] = disclaim s;
+  disclaim a;
+}
+
+template<typename T>
+void testTemplateDisclaim() {
+  T x;
+  auto y = disclaim x;
+}
+void instantiateTemplate() {
+  testTemplateDisclaim<int>();
+}
+
+void testReference() {
+  int a = 42;
+  int& r = a;
+  disclaim r;                  // expected-error {{cannot disclaim references}}
+}
+
+void testPointerDereference() {
+  int a = 42;
+  int* p = &a;
+  disclaim *p;                 // expected-error {{can only disclaim local variables}}
+}
+
+struct S {
+  int x;
+  void testCannotDisclaimMembers() {
+    disclaim x;               // expected-error {{can only disclaim local variables}}
+  }
+};
+
+void testInitList() {
+  MoveOnly a{42};
+  MoveOnly arr[] = {disclaim a}; // should work
+}
+
+void testDecltype() {
+  MoveOnly a{42};
+  decltype(disclaim a) b = MoveOnly{7}; // expected-error {{disclaim used in unevaluated context}}
+}
+
+void testTryCatch() {
+  try {
+    MoveOnly a{42};
+    throw disclaim a;          // verify `disclaim` works in throw context
+  } catch (MoveOnly& m) {
+  }
+}
+
+void testDefaultArgument(int x = disclaim x) {}  // expected-error {{disclaim not allowed in default argument}}
+
+void testMultiDecl() {
+  MoveOnly a{1}, b{2};
+  disclaim a, b;
+}
+
+void testDecltypeAuto() {
+  MoveOnly a{42};
+  decltype(auto) b = disclaim a; // should deduce `MoveOnly`
+}
+
+#define DO_DISCLAIM(x) disclaim x
+void testMacro() {
+  MoveOnly a{42};
+  DO_DISCLAIM(a);              // verify macro expansion is handled correctly
+}
+#undef DO_DISCLAIM
+
+void testRangeFor() {
+  int x[] {1, 2, 3};
+  for (int a : x) {
+    disclaim a;                // expected-error {{cannot disclaim a variable not defined in the same scope}}
+  }
 }
