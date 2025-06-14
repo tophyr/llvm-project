@@ -2098,14 +2098,6 @@ void CodeGenFunction::EmitCXXDeleteExpr(const CXXDeleteExpr *E) {
 
   QualType DeleteTy = E->getDestroyedType();
 
-  // A destroying operator delete overrides the entire operation of the
-  // delete expression.
-  if (E->getOperatorDelete()->isDestroyingOperatorDelete()) {
-    EmitDestroyingObjectDelete(*this, E, Ptr, DeleteTy);
-    EmitBlock(DeleteEnd);
-    return;
-  }
-
   // We might be deleting a pointer to array.  If so, GEP down to the
   // first non-array element.
   // (this assumes that A(*)[3][7] is converted to [3 x [7 x %A]]*)

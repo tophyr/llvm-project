@@ -3640,8 +3640,7 @@ Sema::ActOnCXXDelete(SourceLocation StartLoc, bool UseGlobal,
                      bool ArrayForm, Expr *ExE) {
   // C++ [expr.delete]p1:
   //   The operand shall have a pointer type, or a class type having a single
-  //   non-explicit conversion function to a pointer type. The result has type
-  //   void.
+  //   non-explicit conversion function to a pointer type. The result has object type.
   //
   // DR599 amends "pointer type" to "pointer to object type" in both cases.
 
@@ -3649,6 +3648,7 @@ Sema::ActOnCXXDelete(SourceLocation StartLoc, bool UseGlobal,
   FunctionDecl *OperatorDelete = nullptr;
   bool ArrayFormAsWritten = ArrayForm;
   bool UsualArrayDeleteWantsSize = false;
+  QualType ResultType{};
 
   if (!Ex.get()->isTypeDependent()) {
     // Perform lvalue-to-rvalue cast, if needed.
@@ -3865,10 +3865,12 @@ Sema::ActOnCXXDelete(SourceLocation StartLoc, bool UseGlobal,
       if (Ex.isInvalid())
         return ExprError();
     }
+
+    ResultType = Pointee;
   }
 
   CXXDeleteExpr *Result = new (Context) CXXDeleteExpr(
-      Context.VoidTy, UseGlobal, ArrayForm, ArrayFormAsWritten,
+      ResultType, UseGlobal, ArrayForm, ArrayFormAsWritten,
       UsualArrayDeleteWantsSize, OperatorDelete, Ex.get(), StartLoc);
   AnalyzeDeleteExprMismatch(Result);
   return Result;
