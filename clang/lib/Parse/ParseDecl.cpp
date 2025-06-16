@@ -2186,6 +2186,7 @@ bool Parser::MightBeDeclarator(DeclaratorContext Context) {
 
   case tok::amp:
   case tok::ampamp:
+  case tok::ampamptilde:
     return getLangOpts().CPlusPlus;
 
   case tok::l_square: // Might be an attribute on an unnamed bit-field.
@@ -3515,8 +3516,8 @@ Parser::DiagnoseMissingSemiAfterTagDefinition(DeclSpec &DS, AccessSpecifier AS,
 
     // These tokens cannot come after the declarator-id in a
     // simple-declaration, and are likely to come after a type-specifier.
-    if (Next.isOneOf(tok::star, tok::amp, tok::ampamp, tok::identifier,
-                     tok::annot_cxxscope, tok::coloncolon)) {
+    if (Next.isOneOf(tok::star, tok::amp, tok::ampamp, tok::ampamptilde,
+                     tok::identifier, tok::annot_cxxscope, tok::coloncolon)) {
       // Missing a semicolon.
       MightBeDeclarator = false;
     } else if (HasScope) {
@@ -4177,7 +4178,7 @@ void Parser::ParseDeclarationSpecifiers(
         // a matching list.
         if (NextToken().isOneOf(tok::identifier, tok::kw_const,
                                 tok::kw_volatile, tok::kw_restrict, tok::amp,
-                                tok::ampamp)) {
+                                tok::ampamp, tok::ampamptilde)) {
           Diag(Loc, diag::err_placeholder_expected_auto_or_decltype_auto)
               << FixItHint::CreateInsertion(NextToken().getLocation(), "auto");
           // Attempt to continue as if 'auto' was placed here.
@@ -6650,7 +6651,7 @@ static bool isPtrOperatorToken(tok::TokenKind Kind, const LangOptions &Lang,
   // those can be legitimately followed by a && operator.
   // (The same thing can in theory happen after a trailing-return-type, but
   // since those are a C++11 feature, there is no rejects-valid issue there.)
-  if (Kind == tok::ampamp)
+  if (Kind == tok::ampamp || Kind == tok::ampamptilde)
     return Lang.CPlusPlus11 || (TheContext != DeclaratorContext::ConversionId &&
                                 TheContext != DeclaratorContext::CXXNew);
 
@@ -6827,7 +6828,7 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
 
     // Complain about rvalue references in C++03, but then go on and build
     // the declarator.
-    if (Kind == tok::ampamp)
+    if (Kind == tok::ampamp || Kind == tok::ampamptilde)
       Diag(Loc, getLangOpts().CPlusPlus11 ?
            diag::warn_cxx98_compat_rvalue_reference :
            diag::ext_rvalue_reference);

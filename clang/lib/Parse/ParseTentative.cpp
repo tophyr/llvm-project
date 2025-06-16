@@ -1360,7 +1360,7 @@ Parser::isCXXDeclarationSpecifier(ImplicitTypenameContext AllowImplicitTypename,
             // possibly a situation where we want deduction, such as:
             // `BinaryConcept<int> auto f = bar();`
             (TemplateId->NumArgs == 0 &&
-             GetLookAheadToken(Lookahead + 1).isOneOf(tok::amp, tok::ampamp)));
+             GetLookAheadToken(Lookahead + 1).isOneOf(tok::amp, tok::ampamp, tok::ampamptilde)));
   };
   switch (Tok.getKind()) {
   case tok::identifier: {
@@ -1680,13 +1680,11 @@ Parser::isCXXDeclarationSpecifier(ImplicitTypenameContext AllowImplicitTypename,
             return TPResult::Ambiguous;
           } else {
             // In MS mode, if InvalidAsDeclSpec is not provided, and the tokens
-            // are or the form *) or &) *> or &> &&>, this can't be an expression.
+            // are or the form *) or &) *> or &> &&> &&~>, this can't be an expression.
             // The typename must be missing.
             if (getLangOpts().MSVCCompat) {
-              if (((Tok.is(tok::amp) || Tok.is(tok::star)) &&
-                   (NextToken().is(tok::r_paren) ||
-                    NextToken().is(tok::greater))) ||
-                  (Tok.is(tok::ampamp) && NextToken().is(tok::greater)))
+              if ((Tok.isOneOf(tok::amp, tok::star) && NextToken().isOneOf(tok::r_paren, tok::greater)) ||
+                  (Tok.isOneOf(tok::ampamp, tok::ampamptilde) && NextToken().is(tok::greater)))
                 return TPResult::True;
             }
           }
@@ -2026,8 +2024,8 @@ bool Parser::isCXXFunctionDeclarator(
       TPR = TPResult::False;
     else {
       const Token &Next = NextToken();
-      if (Next.isOneOf(tok::amp, tok::ampamp, tok::kw_const, tok::kw_volatile,
-                       tok::kw_throw, tok::kw_noexcept, tok::l_square,
+      if (Next.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde, tok::kw_const,
+                       tok::kw_volatile, tok::kw_throw, tok::kw_noexcept, tok::l_square,
                        tok::l_brace, tok::kw_try, tok::equal, tok::arrow) ||
           isCXX11VirtSpecifier(Next))
         // The next token cannot appear after a constructor-style initializer,
@@ -2209,7 +2207,7 @@ Parser::TryParseFunctionDeclarator(bool MayHaveTrailingReturnType) {
     ConsumeToken();
 
   // ref-qualifier[opt]
-  if (Tok.isOneOf(tok::amp, tok::ampamp))
+  if (Tok.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde))
     ConsumeToken();
 
   // exception-specification
