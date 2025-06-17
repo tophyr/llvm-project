@@ -2906,6 +2906,7 @@ void CXXNameMangler::mangleRefQualifier(RefQualifierKind RefQualifier) {
     Out << 'R';
     break;
 
+  case RQ_PRValue: // TODO: this likely needs to be different
   case RQ_RValue:
     Out << 'O';
     break;

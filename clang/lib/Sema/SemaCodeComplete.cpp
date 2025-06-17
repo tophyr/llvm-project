@@ -1434,6 +1434,10 @@ void ResultBuilder::AddResult(Result R, DeclContext *CurContext,
             if (ObjectKind != VK_LValue && !MethodQuals.hasConst())
               return;
             break;
+          case RQ_PRValue:
+            if (ObjectKind != VK_PRValue)
+              return;
+            break;
           case RQ_RValue:
             if (ObjectKind == VK_LValue)
               return;

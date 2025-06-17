@@ -767,6 +767,9 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
       case RQ_RValue:
         Proto += " &&";
         break;
+      case RQ_PRValue:
+        Proto += " &&~";
+        break;
       }
     }
 

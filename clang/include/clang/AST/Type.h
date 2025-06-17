@@ -1760,9 +1760,7 @@ public:
   }
 };
 
-/// The kind of C++11 ref-qualifier associated with a function type.
-/// This determines whether a member function's "this" object can be an
-/// lvalue, rvalue, or neither.
+/// The kind of C++11 ref-qualifier associated with a type.
 enum RefQualifierKind {
   /// No ref-qualifier was provided.
   RQ_None = 0,
@@ -1771,8 +1769,20 @@ enum RefQualifierKind {
   RQ_LValue,
 
   /// An rvalue ref-qualifier was provided (\c &&).
-  RQ_RValue
+  RQ_RValue,
+
+  /// A *pure* rvalue ref-qualifier was provided (\c &&~).
+  RQ_PRValue,
 };
+
+inline constexpr std::string_view to_token_str(const RefQualifierKind& Kind) {
+  switch (Kind) {
+    case RQ_None: return "";
+    case RQ_LValue: return "&";
+    case RQ_RValue: return "&&";
+    case RQ_PRValue: return "&&~";
+  }
+}
 
 /// Which keyword(s) were used to create an AutoType.
 enum class AutoTypeKeyword {

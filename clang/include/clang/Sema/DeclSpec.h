@@ -25,6 +25,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjCCommon.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/ExceptionSpecificationType.h"
 #include "clang/Basic/Lambda.h"
 #include "clang/Basic/OperatorKinds.h"
@@ -1371,11 +1372,6 @@ struct DeclaratorChunk {
     LLVM_PREFERRED_TYPE(bool)
     unsigned isAmbiguous : 1;
 
-    /// Whether the ref-qualifier (if any) is an lvalue reference.
-    /// Otherwise, it's an rvalue reference.
-    LLVM_PREFERRED_TYPE(bool)
-    unsigned RefQualifierIsLValueRef : 1;
-
     /// ExceptionSpecType - An ExceptionSpecificationType value.
     LLVM_PREFERRED_TYPE(ExceptionSpecificationType)
     unsigned ExceptionSpecType : 4;
@@ -1406,6 +1402,8 @@ struct DeclaratorChunk {
     /// dynamic-exception-decl, if the function has one. In C, this is the
     /// number of declarations in the function prototype.
     unsigned NumExceptionsOrDecls;
+
+    RefQualifierKind RefQualifierKind;
 
     /// The location of the ref-qualifier, if any.
     ///
@@ -1717,7 +1715,7 @@ struct DeclaratorChunk {
                                      ParamInfo *Params, unsigned NumParams,
                                      SourceLocation EllipsisLoc,
                                      SourceLocation RParenLoc,
-                                     bool RefQualifierIsLvalueRef,
+                                     RefQualifierKind RefQualifierKind,
                                      SourceLocation RefQualifierLoc,
                                      SourceLocation MutableLoc,
                                      ExceptionSpecificationType ESpecType,

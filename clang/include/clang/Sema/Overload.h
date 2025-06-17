@@ -519,6 +519,7 @@ class Sema;
       bad_qualifiers,
       lvalue_ref_to_rvalue,
       rvalue_ref_to_lvalue,
+      prvalue_ref_to_non_prvalue,
       too_few_initializers,
       too_many_initializers,
     };

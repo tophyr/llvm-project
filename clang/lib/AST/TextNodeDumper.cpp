@@ -2006,6 +2006,9 @@ void TextNodeDumper::VisitFunctionProtoType(const FunctionProtoType *T) {
   case RQ_RValue:
     OS << " &&";
     break;
+  case RQ_PRValue:
+    OS << " &&~";
+    break;
   }
 
   switch (EPI.ExceptionSpec.Type) {

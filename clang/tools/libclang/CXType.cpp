@@ -1156,6 +1156,8 @@ enum CXRefQualifierKind clang_Type_getCXXRefQualifier(CXType T) {
       return CXRefQualifier_LValue;
     case RQ_RValue:
       return CXRefQualifier_RValue;
+    case RQ_PRValue:
+      return CXRefQualifier_PRValue;
   }
   return CXRefQualifier_None;
 }

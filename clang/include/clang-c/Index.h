@@ -3738,7 +3738,9 @@ enum CXRefQualifierKind {
   /** An lvalue ref-qualifier was provided (\c &). */
   CXRefQualifier_LValue,
   /** An rvalue ref-qualifier was provided (\c &&). */
-  CXRefQualifier_RValue
+  CXRefQualifier_RValue,
+  /** A prvalue ref-qualifier was provided (\c &&~). */
+  CXRefQualifier_PRValue
 };
 
 /**

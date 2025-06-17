@@ -631,6 +631,7 @@ void JSONNodeDumper::VisitFunctionProtoType(const FunctionProtoType *T) {
   switch (E.RefQualifier) {
   case RQ_LValue: JOS.attribute("refQualifier", "&"); break;
   case RQ_RValue: JOS.attribute("refQualifier", "&&"); break;
+  case RQ_PRValue: JOS.attribute("refQualifier", "&&~"); break;
   case RQ_None: break;
   }
   switch (E.ExceptionSpec.Type) {

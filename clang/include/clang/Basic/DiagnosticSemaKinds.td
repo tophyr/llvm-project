@@ -2078,8 +2078,8 @@ def err_member_function_call_bad_cvr : Error<
   "%select{const|restrict|const or restrict|volatile|const or volatile|"
   "volatile or restrict|const, volatile, or restrict}2">;
 def err_member_function_call_bad_ref : Error<
-  "'this' argument to member function %0 is an %select{lvalue|rvalue}1, "
-  "but function has %select{non-const lvalue|rvalue}2 ref-qualifier">;
+  "'this' argument to member function %0 is an %select{lvalue|rvalue|prvalue}1, "
+  "but function has %select{non-const lvalue|rvalue|prvalue}2 ref-qualifier">;
 def err_member_function_call_bad_type : Error<
   "cannot initialize object parameter of type %0 with an expression "
   "of type %1">;
@@ -2227,7 +2227,7 @@ def err_constructor_cannot_be : Error<"constructor cannot be declared '%0'">;
 def err_invalid_qualified_constructor : Error<
   "'%0' qualifier is not allowed on a constructor">;
 def err_ref_qualifier_constructor : Error<
-  "ref-qualifier '%select{&&|&}0' is not allowed on a constructor">;
+  "ref-qualifier '%select{&|&&|&&~}0' is not allowed on a constructor">;
 def err_invalid_ctor_dtor_decl : Error<
   "invalid %select{constructor|destructor}0 declaration">;
 
@@ -5448,7 +5448,7 @@ def err_pointer_to_member_call_drops_quals : Error<
   "call to pointer to member function of type %0 drops '%1' qualifier%s2">;
 def err_pointer_to_member_oper_value_classify: Error<
   "pointer-to-member function type %0 can only be called on an "
-  "%select{rvalue|lvalue}1">;
+  "%select{rvalue|lvalue|prvalue}1">;
 def ext_pointer_to_const_ref_member_on_rvalue : Extension<
   "invoking a pointer to a 'const &' member function on an rvalue is a C++20 extension">,
   InGroup<CXX20>, SFINAEFailure;

@@ -13,6 +13,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Basic/TemplateKinds.h"
@@ -1587,7 +1588,7 @@ ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
                       /*HasProto=*/true,
                       /*IsAmbiguous=*/false, LParenLoc, ParamInfo.data(),
                       ParamInfo.size(), EllipsisLoc, RParenLoc,
-                      /*RefQualifierIsLvalueRef=*/true,
+                      /*RefQualifierKind=*/RQ_LValue,
                       /*RefQualifierLoc=*/NoLoc, MutableLoc, ESpecType,
                       ESpecRange, DynamicExceptions.data(),
                       DynamicExceptionRanges.data(), DynamicExceptions.size(),

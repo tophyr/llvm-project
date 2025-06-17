@@ -13,9 +13,11 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/PrettyDeclStackTrace.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/AttributeCommonInfo.h"
 #include "clang/Basic/Attributes.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/TargetInfo.h"
@@ -7581,7 +7583,7 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
   SourceLocation EllipsisLoc;
 
   DeclSpec DS(AttrFactory);
-  bool RefQualifierIsLValueRef = true;
+  RefQualifierKind RefQualifierKind;
   SourceLocation RefQualifierLoc;
   ExceptionSpecificationType ESpecType = EST_None;
   SourceRange ESpecRange;
@@ -7651,7 +7653,7 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
       }
 
       // Parse ref-qualifier[opt].
-      if (ParseRefQualifier(RefQualifierIsLValueRef, RefQualifierLoc))
+      if (ParseRefQualifier(RefQualifierKind, RefQualifierLoc))
         EndLoc = RefQualifierLoc;
 
       std::optional<Sema::CXXThisScopeRAII> ThisScope;
@@ -7747,7 +7749,7 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
   D.AddTypeInfo(DeclaratorChunk::getFunction(
                     HasProto, IsAmbiguous, LParenLoc, ParamInfo.data(),
                     ParamInfo.size(), EllipsisLoc, RParenLoc,
-                    RefQualifierIsLValueRef, RefQualifierLoc,
+                    RefQualifierKind, RefQualifierLoc,
                     /*MutableLoc=*/SourceLocation(),
                     ESpecType, ESpecRange, DynamicExceptions.data(),
                     DynamicExceptionRanges.data(), DynamicExceptions.size(),
@@ -7760,15 +7762,24 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
 
 /// ParseRefQualifier - Parses a member function ref-qualifier. Returns
 /// true if a ref-qualifier is found.
-bool Parser::ParseRefQualifier(bool &RefQualifierIsLValueRef,
+bool Parser::ParseRefQualifier(RefQualifierKind &RefQualifierKind,
                                SourceLocation &RefQualifierLoc) {
-  if (Tok.isOneOf(tok::amp, tok::ampamp)) {
+  if (Tok.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde)) {
     Diag(Tok, getLangOpts().CPlusPlus11 ?
          diag::warn_cxx98_compat_ref_qualifier :
          diag::ext_ref_qualifier);
 
-    RefQualifierIsLValueRef = Tok.is(tok::amp);
     RefQualifierLoc = ConsumeToken();
+
+    if (Tok.is(tok::amp)) {
+      RefQualifierKind = RQ_LValue;
+    } else if (Tok.is(tok::ampamp)) {
+      RefQualifierKind = RQ_RValue;
+    } else if (Tok.is(tok::ampamptilde)) {
+      RefQualifierKind = RQ_PRValue;
+    } else {
+      __builtin_unreachable();
+    }
     return true;
   }
   return false;

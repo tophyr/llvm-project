@@ -3238,7 +3238,8 @@ private:
   void InitCXXThisScopeForDeclaratorIfRelevant(
       const Declarator &D, const DeclSpec &DS,
       std::optional<Sema::CXXThisScopeRAII> &ThisScope);
-  bool ParseRefQualifier(bool &RefQualifierIsLValueRef,
+
+  bool ParseRefQualifier(RefQualifierKind &Kind,
                          SourceLocation &RefQualifierLoc);
   bool isFunctionDeclaratorIdentifierList();
   void ParseFunctionDeclaratorIdentifierList(

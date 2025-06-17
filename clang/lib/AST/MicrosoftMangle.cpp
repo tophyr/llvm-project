@@ -2312,6 +2312,7 @@ MicrosoftCXXNameMangler::mangleRefQualifier(RefQualifierKind RefQualifier) {
     Out << 'G';
     break;
 
+  case RQ_PRValue: // TODO: this likely needs to be different
   case RQ_RValue:
     Out << 'H';
     break;

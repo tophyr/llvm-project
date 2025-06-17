@@ -15,6 +15,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/LocInfoType.h"
+#include "clang/AST/Type.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceManager.h"
@@ -162,7 +163,7 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto,
                                              unsigned NumParams,
                                              SourceLocation EllipsisLoc,
                                              SourceLocation RParenLoc,
-                                             bool RefQualifierIsLvalueRef,
+                                             RefQualifierKind RefQualifierKind,
                                              SourceLocation RefQualifierLoc,
                                              SourceLocation MutableLoc,
                                              ExceptionSpecificationType
@@ -199,7 +200,7 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto,
   I.Fun.DeleteParams            = false;
   I.Fun.NumParams               = NumParams;
   I.Fun.Params                  = nullptr;
-  I.Fun.RefQualifierIsLValueRef = RefQualifierIsLvalueRef;
+  I.Fun.RefQualifierKind        = RefQualifierKind;
   I.Fun.RefQualifierLoc         = RefQualifierLoc;
   I.Fun.MutableLoc              = MutableLoc;
   I.Fun.ExceptionSpecType       = ESpecType;

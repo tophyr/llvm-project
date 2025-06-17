@@ -790,7 +790,7 @@ static void maybeSynthesizeBlockSignature(TypeProcessingState &state,
       /*NumParams=*/0,
       /*EllipsisLoc=*/NoLoc,
       /*RParenLoc=*/NoLoc,
-      /*RefQualifierIsLvalueRef=*/true,
+      /*RefQualifierKind=*/RQ_LValue,
       /*RefQualifierLoc=*/NoLoc,
       /*MutableLoc=*/NoLoc, EST_None,
       /*ESpecRange=*/SourceRange(),
@@ -1745,6 +1745,12 @@ static std::string getFunctionQualifiersAsString(const FunctionProtoType *FnTy){
     if (!Quals.empty())
       Quals += ' ';
     Quals += "&&";
+    break;
+
+  case RQ_PRValue:
+    if (!Quals.empty())
+      Quals += ' ';
+    Quals += "&&~";
     break;
   }
 
@@ -5144,9 +5150,8 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
         EPI.TypeQuals.addCVRUQualifiers(
             FTI.MethodQualifiers ? FTI.MethodQualifiers->getTypeQualifiers()
                                  : 0);
-        EPI.RefQualifier = !FTI.hasRefQualifier()? RQ_None
-                    : FTI.RefQualifierIsLValueRef? RQ_LValue
-                    : RQ_RValue;
+        EPI.RefQualifier = !FTI.hasRefQualifier()? RQ_None // TODO clean this up probably?
+                    : FTI.RefQualifierKind;
 
         // Otherwise, we have a function with a parameter list that is
         // potentially variadic.

@@ -301,6 +301,7 @@ void USRGenerator::VisitFunctionDecl(const FunctionDecl *D) {
     case RQ_None: break;
     case RQ_LValue: Out << '&'; break;
     case RQ_RValue: Out << "&&"; break;
+    case RQ_PRValue: Out << "&&~"; break;
     }
   }
 }

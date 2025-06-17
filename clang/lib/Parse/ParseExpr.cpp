@@ -24,6 +24,7 @@
 #include "clang/AST/Availability.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/LocInfoType.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Lex/LiteralSupport.h"
 #include "clang/Parse/Parser.h"
@@ -3889,7 +3890,7 @@ ExprResult Parser::ParseBlockLiteralExpression() {
                                      /*NumParams=*/0,
                                      /*EllipsisLoc=*/NoLoc,
                                      /*RParenLoc=*/NoLoc,
-                                     /*RefQualifierIsLvalueRef=*/true,
+                                     /*RefQualifierKind=*/RQ_LValue,
                                      /*RefQualifierLoc=*/NoLoc,
                                      /*MutableLoc=*/NoLoc, EST_None,
                                      /*ESpecRange=*/SourceRange(),

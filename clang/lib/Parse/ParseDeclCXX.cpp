@@ -2828,17 +2828,16 @@ void Parser::MaybeParseAndDiagnoseDeclSpecAfterCXX11VirtSpecifierSeq(
     }
 
     // Parse ref-qualifiers.
-    bool RefQualifierIsLValueRef = true;
+    RefQualifierKind RefQualifierKind;
     SourceLocation RefQualifierLoc;
-    if (ParseRefQualifier(RefQualifierIsLValueRef, RefQualifierLoc)) {
-      const char *Name = (RefQualifierIsLValueRef ? "& " : "&& ");
+    if (ParseRefQualifier(RefQualifierKind, RefQualifierLoc)) {
       FixItHint Insertion =
-          FixItHint::CreateInsertion(VS.getFirstLocation(), Name);
-      Function.RefQualifierIsLValueRef = RefQualifierIsLValueRef;
+          FixItHint::CreateInsertion(VS.getFirstLocation(), to_token_str(RefQualifierKind));
+      Function.RefQualifierKind = RefQualifierKind;
       Function.RefQualifierLoc = RefQualifierLoc;
 
       Diag(RefQualifierLoc, diag::err_declspec_after_virtspec)
-          << (RefQualifierIsLValueRef ? "&" : "&&")
+          << to_token_str(RefQualifierKind)
           << VirtSpecifiers::getSpecifierName(VS.getLastSpecifier())
           << FixItHint::CreateRemoval(RefQualifierLoc) << Insertion;
       D.SetRangeEnd(RefQualifierLoc);

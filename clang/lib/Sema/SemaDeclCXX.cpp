@@ -10833,7 +10833,7 @@ QualType Sema::CheckConstructorDeclarator(Declarator &D, QualType R,
   DeclaratorChunk::FunctionTypeInfo &FTI = D.getFunctionTypeInfo();
   if (FTI.hasRefQualifier()) {
     Diag(FTI.getRefQualifierLoc(), diag::err_ref_qualifier_constructor)
-      << FTI.RefQualifierIsLValueRef
+      << (static_cast<int>(FTI.RefQualifierKind) - 1)
       << FixItHint::CreateRemoval(FTI.getRefQualifierLoc());
     D.setInvalidType();
   }
@@ -11000,7 +11000,7 @@ QualType Sema::CheckDestructorDeclarator(Declarator &D, QualType R,
   DeclaratorChunk::FunctionTypeInfo &FTI = D.getFunctionTypeInfo();
   if (FTI.hasRefQualifier()) {
     Diag(FTI.getRefQualifierLoc(), diag::err_ref_qualifier_destructor)
-      << FTI.RefQualifierIsLValueRef
+      << (static_cast<int>(FTI.RefQualifierKind) - 1)
       << FixItHint::CreateRemoval(FTI.getRefQualifierLoc());
     D.setInvalidType();
   }

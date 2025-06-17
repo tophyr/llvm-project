@@ -6579,6 +6579,12 @@ QualType Sema::CheckPointerToMemberOperands(ExprResult &LHS, ExprResult &RHS,
         Diag(Loc, diag::err_pointer_to_member_oper_value_classify)
           << RHSType << 0 << LHS.get()->getSourceRange();
       break;
+
+    case RQ_PRValue:
+      if (isIndirect || !LHS.get()->Classify(Context).isPRValue())
+        Diag(Loc, diag::err_pointer_to_member_oper_value_classify)
+          << RHSType << 2 << LHS.get()->getSourceRange();
+      break;
     }
   }
 

@@ -1035,6 +1035,10 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
   case RQ_RValue:
     OS << " &&";
     break;
+
+  case RQ_PRValue:
+    OS << " &&~";
+    break;
   }
   T->printExceptionSpecification(OS, Policy);
 
