@@ -493,6 +493,31 @@ void TypePrinter::printRValueReferenceAfter(const RValueReferenceType *T,
   printAfter(Inner, OS);
 }
 
+void TypePrinter::printPRValueReferenceBefore(const PRValueReferenceType *T,
+                                             raw_ostream &OS) {
+  IncludeStrongLifetimeRAII Strong(Policy);
+  SaveAndRestore NonEmptyPH(HasEmptyPlaceHolder, false);
+  QualType Inner = skipTopLevelReferences(T->getPointeeTypeAsWritten());
+  printBefore(Inner, OS);
+  // Handle things like 'int (&&A)[4];' correctly.
+  // FIXME: this should include vectors, but vectors use attributes I guess.
+  if (isa<ArrayType>(Inner))
+    OS << '(';
+  OS << "&&~";
+}
+
+void TypePrinter::printPRValueReferenceAfter(const PRValueReferenceType *T,
+                                            raw_ostream &OS) {
+  IncludeStrongLifetimeRAII Strong(Policy);
+  SaveAndRestore NonEmptyPH(HasEmptyPlaceHolder, false);
+  QualType Inner = skipTopLevelReferences(T->getPointeeTypeAsWritten());
+  // Handle things like 'int (&&A)[4];' correctly.
+  // FIXME: this should include vectors, but vectors use attributes I guess.
+  if (isa<ArrayType>(Inner))
+    OS << ')';
+  printAfter(Inner, OS);
+}
+
 void TypePrinter::printMemberPointerBefore(const MemberPointerType *T,
                                            raw_ostream &OS) {
   IncludeStrongLifetimeRAII Strong(Policy);

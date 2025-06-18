@@ -3877,6 +3877,13 @@ void CXXNameMangler::mangleType(const RValueReferenceType *T) {
   mangleType(T->getPointeeType());
 }
 
+// <type> ::= O <type>   # rvalue reference-to (C++0x)
+void CXXNameMangler::mangleType(const PRValueReferenceType *T) {
+  __builtin_abort(); // TODO
+  Out << 'O';
+  mangleType(T->getPointeeType());
+}
+
 // <type> ::= C <type>   # complex pair (C 2000)
 void CXXNameMangler::mangleType(const ComplexType *T) {
   Out << 'C';

@@ -4041,6 +4041,43 @@ QualType ASTContext::getRValueReferenceType(QualType T) const {
   return QualType(New, 0);
 }
 
+QualType ASTContext::getPRValueReferenceType(QualType T) const {
+  assert((!T->isPlaceholderType() ||
+          T->isSpecificPlaceholderType(BuiltinType::UnknownAny)) &&
+         "Unresolved placeholder type");
+
+  // Unique pointers, to guarantee there is only one pointer of a particular
+  // structure.
+  llvm::FoldingSetNodeID ID;
+  ReferenceType::Profile(ID, T, false); // TODO
+
+  void *InsertPos = nullptr;
+  if (PRValueReferenceType *PRT =
+        PRValueReferenceTypes.FindNodeOrInsertPos(ID, InsertPos))
+    return QualType(PRT, 0);
+
+  const auto *InnerRef = T->getAs<ReferenceType>();
+
+  // If the referencee type isn't canonical, this won't be a canonical type
+  // either, so fill in the canonical type field.
+  QualType Canonical;
+  if (InnerRef || !T.isCanonical()) {
+    QualType PointeeType = (InnerRef ? InnerRef->getPointeeType() : T);
+    Canonical = getPRValueReferenceType(getCanonicalType(PointeeType));
+
+    // Get the new insert position for the node we care about.
+    PRValueReferenceType *NewIP =
+      PRValueReferenceTypes.FindNodeOrInsertPos(ID, InsertPos);
+    assert(!NewIP && "Shouldn't be in the map!"); (void)NewIP;
+  }
+
+  auto *New = new (*this, alignof(PRValueReferenceType))
+      PRValueReferenceType(T, Canonical);
+  Types.push_back(New);
+  PRValueReferenceTypes.InsertNode(New, InsertPos);
+  return QualType(New, 0);
+}
+
 /// getMemberPointerType - Return the uniqued reference to the type for a
 /// member pointer to the specified type, in the specified class.
 QualType ASTContext::getMemberPointerType(QualType T, const Type *Cls) const {

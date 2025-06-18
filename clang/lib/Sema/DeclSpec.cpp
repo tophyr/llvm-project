@@ -200,7 +200,7 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto,
   I.Fun.DeleteParams            = false;
   I.Fun.NumParams               = NumParams;
   I.Fun.Params                  = nullptr;
-  I.Fun.RefQualifierKind        = RefQualifierKind;
+  I.Fun.RefQualifierKind()        = RefQualifierKind;
   I.Fun.RefQualifierLoc         = RefQualifierLoc;
   I.Fun.MutableLoc              = MutableLoc;
   I.Fun.ExceptionSpecType       = ESpecType;

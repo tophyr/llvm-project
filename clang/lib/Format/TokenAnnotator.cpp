@@ -1655,7 +1655,7 @@ private:
         if (CurrentToken->is(tok::comma) && Previous->isNot(tok::kw_operator))
           break;
         if (Previous->isOneOf(TT_BinaryOperator, TT_UnaryOperator, tok::comma,
-                              tok::star, tok::arrow, tok::amp, tok::ampamp) ||
+                              tok::star, tok::arrow, tok::amp, tok::ampamp, tok::ampamptilde) ||
             // User defined literal.
             Previous->TokenText.starts_with("\"\"")) {
           Previous->setType(TT_OverloadedOperator);
@@ -4914,7 +4914,7 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     // Objective-C dictionary literal -> no space before closing brace.
     return false;
   }
-  if (Right.is(TT_TrailingAnnotation) && Right.isOneOf(tok::amp, tok::ampamp) &&
+  if (Right.is(TT_TrailingAnnotation) && Right.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde) &&
       Left.isOneOf(tok::kw_const, tok::kw_volatile) &&
       (!Right.Next || Right.Next->is(tok::semi))) {
     // Match const and volatile ref-qualifiers without any additional
@@ -5503,17 +5503,17 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
   if ((Left.is(TT_TemplateOpener)) != (Right.is(TT_TemplateCloser)))
     return ShouldAddSpacesInAngles();
   if (Left.is(tok::r_paren) && Left.isNot(TT_TypeDeclarationParen) &&
-      Right.is(TT_PointerOrReference) && Right.isOneOf(tok::amp, tok::ampamp)) {
+      Right.is(TT_PointerOrReference) && Right.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde)) {
     return true;
   }
   // Space before TT_StructuredBindingLSquare.
   if (Right.is(TT_StructuredBindingLSquare)) {
-    return !Left.isOneOf(tok::amp, tok::ampamp) ||
+    return !Left.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde) ||
            getTokenReferenceAlignment(Left) != FormatStyle::PAS_Right;
   }
   // Space before & or && following a TT_StructuredBindingLSquare.
   if (Right.Next && Right.Next->is(TT_StructuredBindingLSquare) &&
-      Right.isOneOf(tok::amp, tok::ampamp)) {
+      Right.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde)) {
     return getTokenReferenceAlignment(Right) != FormatStyle::PAS_Left;
   }
   if ((Right.is(TT_BinaryOperator) && Left.isNot(tok::l_paren)) ||
@@ -6458,7 +6458,7 @@ void TokenAnnotator::printDebugInfo(const AnnotatedLine &Line) const {
 
 FormatStyle::PointerAlignmentStyle
 TokenAnnotator::getTokenReferenceAlignment(const FormatToken &Reference) const {
-  assert(Reference.isOneOf(tok::amp, tok::ampamp));
+  assert(Reference.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde));
   switch (Style.ReferenceAlignment) {
   case FormatStyle::RAS_Pointer:
     return Style.PointerAlignment;
@@ -6476,7 +6476,7 @@ TokenAnnotator::getTokenReferenceAlignment(const FormatToken &Reference) const {
 FormatStyle::PointerAlignmentStyle
 TokenAnnotator::getTokenPointerOrReferenceAlignment(
     const FormatToken &PointerOrReference) const {
-  if (PointerOrReference.isOneOf(tok::amp, tok::ampamp)) {
+  if (PointerOrReference.isOneOf(tok::amp, tok::ampamp, tok::ampamptilde)) {
     switch (Style.ReferenceAlignment) {
     case FormatStyle::RAS_Pointer:
       return Style.PointerAlignment;

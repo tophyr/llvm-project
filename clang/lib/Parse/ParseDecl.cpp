@@ -6671,6 +6671,15 @@ static bool isPipeDeclarator(const Declarator &D) {
   return false;
 }
 
+static RefQualifierKind RefQualifierKindFromTokenKind(tok::TokenKind Kind) {
+  switch (Kind) {
+    case tok::amp: return clang::RQ_LValue;
+    case tok::ampamp: return clang::RQ_RValue;
+    case tok::ampamptilde: return clang::RQ_PRValue;
+    default: return clang::RQ_None;
+  }
+}
+
 /// ParseDeclaratorInternal - Parse a C or C++ declarator. The direct-declarator
 /// is parsed by the function passed to it. Pass null, and the direct-declarator
 /// isn't parsed at all, making this function effectively parse the C++
@@ -6878,7 +6887,7 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
 
     // Remember that we parsed a reference type.
     D.AddTypeInfo(DeclaratorChunk::getReference(DS.getTypeQualifiers(), Loc,
-                                                Kind == tok::amp),
+                                                RefQualifierKindFromTokenKind(Kind)),
                   std::move(DS.getAttributes()), SourceLocation());
   }
 }
@@ -7583,7 +7592,7 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
   SourceLocation EllipsisLoc;
 
   DeclSpec DS(AttrFactory);
-  RefQualifierKind RefQualifierKind;
+  RefQualifierKind RefQualifierKind{};
   SourceLocation RefQualifierLoc;
   ExceptionSpecificationType ESpecType = EST_None;
   SourceRange ESpecRange;
@@ -7770,16 +7779,7 @@ bool Parser::ParseRefQualifier(RefQualifierKind &RefQualifierKind,
          diag::ext_ref_qualifier);
 
     RefQualifierLoc = ConsumeToken();
-
-    if (Tok.is(tok::amp)) {
-      RefQualifierKind = RQ_LValue;
-    } else if (Tok.is(tok::ampamp)) {
-      RefQualifierKind = RQ_RValue;
-    } else if (Tok.is(tok::ampamptilde)) {
-      RefQualifierKind = RQ_PRValue;
-    } else {
-      __builtin_unreachable();
-    }
+    RefQualifierKind = RefQualifierKindFromTokenKind(Tok.getKind());
     return true;
   }
   return false;

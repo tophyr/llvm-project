@@ -4094,8 +4094,14 @@ LexStart:
   case '&':
     Char = getCharAndSize(CurPtr, SizeTmp);
     if (Char == '&') {
-      Kind = tok::ampamp;
-      CurPtr = ConsumeChar(CurPtr, SizeTmp, Result);
+      if (getCharAndSize(CurPtr+SizeTmp, SizeTmp2) == '~') {
+        Kind = tok::ampamptilde;
+        // TODO: can this consumechar sequence be combined with below? dumb to duplicate
+        CurPtr = ConsumeChar(ConsumeChar(CurPtr, SizeTmp, Result), SizeTmp2, Result);
+      } else {
+        Kind = tok::ampamp;
+        CurPtr = ConsumeChar(CurPtr, SizeTmp, Result);
+      }
     } else if (Char == '=') {
       Kind = tok::ampequal;
       CurPtr = ConsumeChar(CurPtr, SizeTmp, Result);

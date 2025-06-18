@@ -3454,6 +3454,19 @@ void MicrosoftCXXNameMangler::mangleType(const RValueReferenceType *T,
   mangleType(PointeeType, Range);
 }
 
+// <type> ::= <r-value-reference-type>
+// <r-value-reference-type> ::= $$Q E? <cvr-qualifiers> <type>
+//                 # the E is required for 64-bit non-static rvalue references
+void MicrosoftCXXNameMangler::mangleType(const PRValueReferenceType *T,
+                                         Qualifiers Quals, SourceRange Range) {
+  __builtin_abort(); // TODO
+  QualType PointeeType = T->getPointeeType();
+  assert(!Quals.hasConst() && !Quals.hasVolatile() && "unexpected qualifier!");
+  Out << "$$Q";
+  manglePointerExtQualifiers(Quals, PointeeType);
+  mangleType(PointeeType, Range);
+}
+
 void MicrosoftCXXNameMangler::mangleType(const ComplexType *T, Qualifiers,
                                          SourceRange Range) {
   QualType ElementType = T->getElementType();

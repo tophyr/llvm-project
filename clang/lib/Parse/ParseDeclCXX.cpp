@@ -2833,7 +2833,7 @@ void Parser::MaybeParseAndDiagnoseDeclSpecAfterCXX11VirtSpecifierSeq(
     if (ParseRefQualifier(RefQualifierKind, RefQualifierLoc)) {
       FixItHint Insertion =
           FixItHint::CreateInsertion(VS.getFirstLocation(), to_token_str(RefQualifierKind));
-      Function.RefQualifierKind = RefQualifierKind;
+      Function.RefQualifierKind() = RefQualifierKind;
       Function.RefQualifierLoc = RefQualifierLoc;
 
       Diag(RefQualifierLoc, diag::err_declspec_after_virtspec)

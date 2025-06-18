@@ -1446,6 +1446,20 @@ public:
   }
 };
 
+class PRValueReferenceTypeLoc :
+    public InheritingConcreteTypeLoc<ReferenceTypeLoc,
+                                     PRValueReferenceTypeLoc,
+                                     PRValueReferenceType> {
+public:
+  SourceLocation getAmpAmpTildeLoc() const {
+    return getSigilLoc();
+  }
+
+  void setAmpAmpTildeLoc(SourceLocation Loc) {
+    setSigilLoc(Loc);
+  }
+};
+
 struct FunctionLocInfo {
   SourceLocation LocalRangeBegin;
   SourceLocation LParenLoc;

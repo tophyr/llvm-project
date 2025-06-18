@@ -1771,6 +1771,10 @@ bool CursorVisitor::VisitRValueReferenceTypeLoc(RValueReferenceTypeLoc TL) {
   return Visit(TL.getPointeeLoc());
 }
 
+bool CursorVisitor::VisitPRValueReferenceTypeLoc(PRValueReferenceTypeLoc TL) {
+  return Visit(TL.getPointeeLoc());
+}
+
 bool CursorVisitor::VisitUsingTypeLoc(UsingTypeLoc TL) {
   auto *underlyingDecl = TL.getUnderlyingType()->getAsTagDecl();
   if (underlyingDecl) {

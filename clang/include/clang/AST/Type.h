@@ -3486,7 +3486,8 @@ public:
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == LValueReference ||
-           T->getTypeClass() == RValueReference;
+           T->getTypeClass() == RValueReference ||
+           T->getTypeClass() == PRValueReference;
   }
 };
 
@@ -3521,6 +3522,22 @@ public:
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == RValueReference;
+  }
+};
+
+/// A prvalue reference type
+class PRValueReferenceType : public ReferenceType {
+  friend class ASTContext;
+
+  PRValueReferenceType(QualType Referencee, QualType CanonicalRef)
+      : ReferenceType{PRValueReference, Referencee, CanonicalRef, false} {}
+  
+public:
+  bool isSugared() const { return false; }
+  QualType desugar() const { return QualType{this, 0}; }
+
+  static bool classof(const Type *T) {
+    return T->getTypeClass() == PRValueReference;
   }
 };
 

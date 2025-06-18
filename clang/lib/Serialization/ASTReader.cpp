@@ -7095,6 +7095,10 @@ void TypeLocReader::VisitRValueReferenceTypeLoc(RValueReferenceTypeLoc TL) {
   TL.setAmpAmpLoc(readSourceLocation());
 }
 
+void TypeLocReader::VisitPRValueReferenceTypeLoc(PRValueReferenceTypeLoc TL) {
+  TL.setAmpAmpTildeLoc(readSourceLocation());
+}
+
 void TypeLocReader::VisitMemberPointerTypeLoc(MemberPointerTypeLoc TL) {
   TL.setStarLoc(readSourceLocation());
   TL.setClassTInfo(GetTypeSourceInfo());

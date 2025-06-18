@@ -5919,6 +5919,11 @@ bool UnnamedLocalNoLinkageFinder::VisitRValueReferenceType(
   return Visit(T->getPointeeType());
 }
 
+bool UnnamedLocalNoLinkageFinder::VisitPRValueReferenceType(
+                                                const PRValueReferenceType* T) {
+  return Visit(T->getPointeeType());
+}
+
 bool UnnamedLocalNoLinkageFinder::VisitMemberPointerType(
                                                   const MemberPointerType* T) {
   return Visit(T->getPointeeType()) || Visit(QualType(T->getClass(), 0));

@@ -1296,8 +1296,8 @@ struct DeclaratorChunk {
   struct ReferenceTypeInfo {
     /// The type qualifier: restrict. [GNU] C++ extension
     bool HasRestrict : 1;
-    /// True if this is an lvalue reference, false if it's an rvalue reference.
-    bool LValueRef : 1;
+    /// The kind of reference
+    RefQualifierKind Kind;
     void destroy() {
     }
   };
@@ -1403,7 +1403,10 @@ struct DeclaratorChunk {
     /// number of declarations in the function prototype.
     unsigned NumExceptionsOrDecls;
 
-    RefQualifierKind RefQualifierKind;
+    private:
+    RefQualifierKind RefQualifierKind_;
+    public:
+    RefQualifierKind& RefQualifierKind() { return RefQualifierKind_; }
 
     /// The location of the ref-qualifier, if any.
     ///
@@ -1683,12 +1686,12 @@ struct DeclaratorChunk {
 
   /// Return a DeclaratorChunk for a reference.
   static DeclaratorChunk getReference(unsigned TypeQuals, SourceLocation Loc,
-                                      bool lvalue) {
+                                      RefQualifierKind Kind) {
     DeclaratorChunk I;
     I.Kind            = Reference;
     I.Loc             = Loc;
     I.Ref.HasRestrict = (TypeQuals & DeclSpec::TQ_restrict) != 0;
-    I.Ref.LValueRef   = lvalue;
+    I.Ref.Kind        = Kind;
     return I;
   }
 

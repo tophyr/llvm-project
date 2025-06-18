@@ -196,6 +196,7 @@ class ASTContext : public RefCountedBase<ASTContext> {
   mutable llvm::FoldingSet<BlockPointerType> BlockPointerTypes;
   mutable llvm::FoldingSet<LValueReferenceType> LValueReferenceTypes;
   mutable llvm::FoldingSet<RValueReferenceType> RValueReferenceTypes;
+  mutable llvm::FoldingSet<PRValueReferenceType> PRValueReferenceTypes;
   mutable llvm::FoldingSet<MemberPointerType> MemberPointerTypes;
   mutable llvm::ContextualFoldingSet<ConstantArrayType, ASTContext &>
       ConstantArrayTypes;
@@ -1556,6 +1557,10 @@ public:
   /// Return the uniqued reference to the type for an rvalue reference
   /// to the specified type.
   QualType getRValueReferenceType(QualType T) const;
+
+  /// Return the uniqued reference to the type for a prvalue reference
+  /// to the specified type.
+  QualType getPRValueReferenceType(QualType T) const;
 
   /// Return the uniqued reference to the type for a member pointer to
   /// the specified type in the specified class.

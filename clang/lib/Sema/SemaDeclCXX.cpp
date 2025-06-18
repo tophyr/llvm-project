@@ -24,6 +24,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/AST/Type.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeOrdering.h"
 #include "clang/Basic/AttributeCommonInfo.h"
@@ -1304,7 +1305,7 @@ static bool checkTupleLikeDecomposition(Sema &S,
     //   initializer, where the reference is an lvalue reference if the
     //   initializer is an lvalue and an rvalue reference otherwise
     QualType RefType =
-        S.BuildReferenceType(T, E.get()->isLValue(), Loc, B->getDeclName());
+        S.BuildReferenceType(T, E.get()->isLValue() ? RQ_LValue : RQ_RValue, Loc, B->getDeclName());
     if (RefType.isNull())
       return true;
     auto *RefVD = VarDecl::Create(
@@ -4776,7 +4777,7 @@ Sema::BuildBaseInitializer(QualType BaseType, TypeSourceInfo *BaseTInfo,
 // Create a static_cast\<T&&>(expr).
 static Expr *CastForMoving(Sema &SemaRef, Expr *E) {
   QualType TargetType =
-      SemaRef.BuildReferenceType(E->getType(), /*SpelledAsLValue*/ false,
+      SemaRef.BuildReferenceType(E->getType(), clang::RQ_RValue,
                                  SourceLocation(), DeclarationName());
   SourceLocation ExprLoc = E->getBeginLoc();
   TypeSourceInfo *TargetLoc = SemaRef.Context.getTrivialTypeSourceInfo(
@@ -10833,7 +10834,7 @@ QualType Sema::CheckConstructorDeclarator(Declarator &D, QualType R,
   DeclaratorChunk::FunctionTypeInfo &FTI = D.getFunctionTypeInfo();
   if (FTI.hasRefQualifier()) {
     Diag(FTI.getRefQualifierLoc(), diag::err_ref_qualifier_constructor)
-      << (static_cast<int>(FTI.RefQualifierKind) - 1)
+      << (static_cast<int>(FTI.RefQualifierKind()) - 1)
       << FixItHint::CreateRemoval(FTI.getRefQualifierLoc());
     D.setInvalidType();
   }
@@ -11000,7 +11001,7 @@ QualType Sema::CheckDestructorDeclarator(Declarator &D, QualType R,
   DeclaratorChunk::FunctionTypeInfo &FTI = D.getFunctionTypeInfo();
   if (FTI.hasRefQualifier()) {
     Diag(FTI.getRefQualifierLoc(), diag::err_ref_qualifier_destructor)
-      << (static_cast<int>(FTI.RefQualifierKind) - 1)
+      << (static_cast<int>(FTI.RefQualifierKind()) - 1)
       << FixItHint::CreateRemoval(FTI.getRefQualifierLoc());
     D.setInvalidType();
   }

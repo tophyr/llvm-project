@@ -15,6 +15,7 @@
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/MangleNumberingContext.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/Initialization.h"
@@ -794,7 +795,7 @@ QualType Sema::buildLambdaInitCaptureInitialization(
   AutoTypeLoc TL = TLB.push<AutoTypeLoc>(DeductType);
   TL.setNameLoc(Loc);
   if (ByRef) {
-    DeductType = BuildReferenceType(DeductType, true, Loc, Id);
+    DeductType = BuildReferenceType(DeductType, RQ_LValue, Loc, Id);
     assert(!DeductType.isNull() && "can't build reference to auto");
     TLB.push<ReferenceTypeLoc>(DeductType).setSigilLoc(Loc);
   }

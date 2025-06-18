@@ -30,6 +30,7 @@
 #include "clang/AST/StmtOpenACC.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtSYCL.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/OpenMPKinds.h"
 #include "clang/Sema/Designator.h"
@@ -855,7 +856,7 @@ public:
   /// \param LValue whether the type was written with an lvalue sigil
   /// or an rvalue sigil.
   QualType RebuildReferenceType(QualType ReferentType,
-                                bool LValue,
+                                RefQualifierKind RefQualifierKind,
                                 SourceLocation Sigil);
 
   /// Build a new member pointer type given the pointee type and the
@@ -5536,8 +5537,16 @@ TreeTransform<Derived>::TransformReferenceType(TypeLocBuilder &TLB,
   QualType Result = TL.getType();
   if (getDerived().AlwaysRebuild() ||
       PointeeType != T->getPointeeTypeAsWritten()) {
+    
     Result = getDerived().RebuildReferenceType(PointeeType,
-                                               T->isSpelledAsLValue(),
+                                               [&] {
+                                                switch (T->getTypeClass()) {
+                                                  case Type::LValueReference: return RQ_LValue;
+                                                  case Type::RValueReference: return RQ_RValue;
+                                                  case Type::PRValueReference: return RQ_PRValue;
+                                                  default: __builtin_unreachable();
+                                                }
+                                               }(),
                                                TL.getSigilLoc());
     if (Result.isNull())
       return QualType();
@@ -5570,6 +5579,13 @@ template<typename Derived>
 QualType
 TreeTransform<Derived>::TransformRValueReferenceType(TypeLocBuilder &TLB,
                                                  RValueReferenceTypeLoc TL) {
+  return TransformReferenceType(TLB, TL);
+}
+
+template<typename Derived>
+QualType
+TreeTransform<Derived>::TransformPRValueReferenceType(TypeLocBuilder &TLB,
+                                                 PRValueReferenceTypeLoc TL) {
   return TransformReferenceType(TLB, TL);
 }
 
@@ -16905,9 +16921,9 @@ QualType TreeTransform<Derived>::RebuildBlockPointerType(QualType PointeeType,
 template<typename Derived>
 QualType
 TreeTransform<Derived>::RebuildReferenceType(QualType ReferentType,
-                                             bool WrittenAsLValue,
+                                             RefQualifierKind RefQualifierKind,
                                              SourceLocation Sigil) {
-  return SemaRef.BuildReferenceType(ReferentType, WrittenAsLValue,
+  return SemaRef.BuildReferenceType(ReferentType, RefQualifierKind,
                                     Sigil, getDerived().getBaseEntity());
 }
 

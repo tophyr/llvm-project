@@ -740,7 +740,7 @@ public:
   }
 
   bool isPointerOrReference() const {
-    return isOneOf(tok::star, tok::amp, tok::ampamp);
+    return isOneOf(tok::star, tok::amp, tok::ampamp, tok::ampamptilde);
   }
 
   bool isUnaryOperator() const {
@@ -853,7 +853,7 @@ public:
     do {
       T = T->getPreviousNonComment();
     } while (T && T->isOneOf(tok::kw_const, tok::kw_volatile, tok::amp,
-                             tok::ampamp));
+                             tok::ampamp, tok::ampamptilde)); // TODO: should &&~ be allowed in a structured binding?
     return T && T->is(tok::kw_auto);
   }
 

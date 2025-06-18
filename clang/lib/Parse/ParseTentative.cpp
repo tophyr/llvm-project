@@ -916,7 +916,7 @@ Parser::TPResult Parser::TryParsePtrOperatorSeq() {
     if (TryAnnotateOptionalCXXScopeToken(true))
       return TPResult::Error;
 
-    if (Tok.isOneOf(tok::star, tok::amp, tok::caret, tok::ampamp) ||
+    if (Tok.isOneOf(tok::star, tok::amp, tok::caret, tok::ampamp, tok::ampamptilde) ||
         (Tok.is(tok::annot_cxxscope) && NextToken().is(tok::star))) {
       // ptr-operator
       ConsumeAnyToken();

@@ -1861,7 +1861,7 @@ QualType Sema::BuildPointerType(QualType T,
   return Context.getPointerType(T);
 }
 
-QualType Sema::BuildReferenceType(QualType T, bool SpelledAsLValue,
+QualType Sema::BuildReferenceType(QualType T, RefQualifierKind RefQualifierKind,
                                   SourceLocation Loc,
                                   DeclarationName Entity) {
   assert(Context.getCanonicalType(T) != Context.OverloadTy &&
@@ -1873,7 +1873,7 @@ QualType Sema::BuildReferenceType(QualType T, bool SpelledAsLValue,
   //   type T, an attempt to create the type "lvalue reference to cv TR" creates
   //   the type "lvalue reference to T", while an attempt to create the type
   //   "rvalue reference to cv TR" creates the type TR.
-  bool LValueRef = SpelledAsLValue || T->getAs<LValueReferenceType>();
+  bool LValueRef = (RefQualifierKind == RQ_LValue) || T->getAs<LValueReferenceType>();
 
   // C++ [dcl.ref]p4: There shall be no references to references.
   //
@@ -1932,7 +1932,9 @@ QualType Sema::BuildReferenceType(QualType T, bool SpelledAsLValue,
 
   // Handle restrict on references.
   if (LValueRef)
-    return Context.getLValueReferenceType(T, SpelledAsLValue);
+    return Context.getLValueReferenceType(T, (RefQualifierKind == RQ_LValue));
+  if (RefQualifierKind == RQ_PRValue)
+    return Context.getPRValueReferenceType(T);
   return Context.getRValueReferenceType(T);
 }
 
@@ -4703,7 +4705,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
         D.setInvalidType(true);
         // Build the type anyway.
       }
-      T = S.BuildReferenceType(T, DeclType.Ref.LValueRef, DeclType.Loc, Name);
+      T = S.BuildReferenceType(T, DeclType.Ref.Kind, DeclType.Loc, Name);
 
       if (DeclType.Ref.HasRestrict)
         T = S.BuildQualifiedType(T, DeclType.Loc, Qualifiers::Restrict);
@@ -5151,7 +5153,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
             FTI.MethodQualifiers ? FTI.MethodQualifiers->getTypeQualifiers()
                                  : 0);
         EPI.RefQualifier = !FTI.hasRefQualifier()? RQ_None // TODO clean this up probably?
-                    : FTI.RefQualifierKind;
+                    : FTI.RefQualifierKind();
 
         // Otherwise, we have a function with a parameter list that is
         // potentially variadic.
@@ -6228,8 +6230,13 @@ namespace {
     }
     void VisitRValueReferenceTypeLoc(RValueReferenceTypeLoc TL) {
       assert(Chunk.Kind == DeclaratorChunk::Reference);
-      assert(!Chunk.Ref.LValueRef);
+      assert(Chunk.Ref.Kind != RQ_LValue);
       TL.setAmpAmpLoc(Chunk.Loc);
+    }
+    void VisitPRValueReferenceTypeLoc(PRValueReferenceTypeLoc TL) {
+      assert(Chunk.Kind == DeclaratorChunk::Reference);
+      assert(Chunk.Ref.Kind == RQ_PRValue);
+      TL.setAmpAmpTildeLoc(Chunk.Loc);
     }
     void VisitArrayTypeLoc(ArrayTypeLoc TL) {
       assert(Chunk.Kind == DeclaratorChunk::Array);
@@ -9843,7 +9850,7 @@ QualType Sema::BuiltinAddReference(QualType BaseType, UTTKind UKind,
   QualType Reference =
       BaseType.isReferenceable()
           ? BuildReferenceType(BaseType,
-                               UKind == UnaryTransformType::AddLvalueReference,
+                               (UKind == UnaryTransformType::AddLvalueReference) ? RQ_LValue : RQ_RValue,
                                Loc, DeclarationName())
           : BaseType;
   return Reference.isNull() ? QualType() : Reference;

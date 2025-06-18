@@ -406,6 +406,10 @@ void TypeLocWriter::VisitRValueReferenceTypeLoc(RValueReferenceTypeLoc TL) {
   addSourceLocation(TL.getAmpAmpLoc());
 }
 
+void TypeLocWriter::VisitPRValueReferenceTypeLoc(PRValueReferenceTypeLoc TL) {
+  addSourceLocation(TL.getAmpAmpTildeLoc());
+}
+
 void TypeLocWriter::VisitMemberPointerTypeLoc(MemberPointerTypeLoc TL) {
   addSourceLocation(TL.getStarLoc());
   Record.AddTypeSourceInfo(TL.getClassTInfo());

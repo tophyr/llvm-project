@@ -1002,6 +1002,9 @@ DEF_TRAVERSE_TYPE(LValueReferenceType,
 DEF_TRAVERSE_TYPE(RValueReferenceType,
                   { TRY_TO(TraverseType(T->getPointeeType())); })
 
+DEF_TRAVERSE_TYPE(PRValueReferenceType,
+                  { TRY_TO(TraverseType(T->getPointeeType())); })
+
 DEF_TRAVERSE_TYPE(MemberPointerType, {
   TRY_TO(TraverseType(QualType(T->getClass(), 0)));
   TRY_TO(TraverseType(T->getPointeeType()));
@@ -1263,6 +1266,9 @@ DEF_TRAVERSE_TYPELOC(LValueReferenceType,
                      { TRY_TO(TraverseTypeLoc(TL.getPointeeLoc())); })
 
 DEF_TRAVERSE_TYPELOC(RValueReferenceType,
+                     { TRY_TO(TraverseTypeLoc(TL.getPointeeLoc())); })
+
+DEF_TRAVERSE_TYPELOC(PRValueReferenceType,
                      { TRY_TO(TraverseTypeLoc(TL.getPointeeLoc())); })
 
 // We traverse this in the type case as well, but how is it not reached through

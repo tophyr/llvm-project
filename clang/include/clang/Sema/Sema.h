@@ -14670,7 +14670,7 @@ public:
   ///
   /// \returns A suitable reference type, if there are no
   /// errors. Otherwise, returns a NULL type.
-  QualType BuildReferenceType(QualType T, bool LValueRef, SourceLocation Loc,
+  QualType BuildReferenceType(QualType T, RefQualifierKind RefQualifierKind, SourceLocation Loc,
                               DeclarationName Entity);
 
   /// Build an array type.

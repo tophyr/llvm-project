@@ -96,6 +96,12 @@ let Class = RValueReferenceType in {
   }]>;
 }
 
+let Class = PRValueReferenceType in {
+  def : Creator<[{
+    return ctx.getPRValueReferenceType(pointeeTypeAsWritten);
+  }]>;
+}
+
 let Class = MemberPointerType in {
   def : Property<"pointeeType", QualType> {
     let Read = [{ node->getPointeeType() }];

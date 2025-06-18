@@ -58,6 +58,7 @@ def BlockPointerType : TypeNode<Type>;
 def ReferenceType : TypeNode<Type, 1>;
 def LValueReferenceType : TypeNode<ReferenceType>;
 def RValueReferenceType : TypeNode<ReferenceType>;
+def PRValueReferenceType : TypeNode<ReferenceType>;
 def MemberPointerType : TypeNode<Type>;
 def ArrayType : TypeNode<Type, 1>;
 def ConstantArrayType : TypeNode<ArrayType>;

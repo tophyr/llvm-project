@@ -19,6 +19,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/EnterExpressionEvaluationContext.h"
@@ -1881,7 +1882,7 @@ static Expr *castForMoving(Sema &S, Expr *E, QualType T = QualType()) {
   if (T.isNull())
     T = E->getType();
   QualType TargetType = S.BuildReferenceType(
-      T, /*SpelledAsLValue*/ false, SourceLocation(), DeclarationName());
+      T, clang::RQ_RValue, SourceLocation(), DeclarationName());
   SourceLocation ExprLoc = E->getBeginLoc();
   TypeSourceInfo *TargetLoc =
       S.Context.getTrivialTypeSourceInfo(TargetType, ExprLoc);

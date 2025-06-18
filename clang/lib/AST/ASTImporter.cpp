@@ -1238,6 +1238,16 @@ ASTNodeImporter::VisitRValueReferenceType(const RValueReferenceType *T) {
 }
 
 ExpectedType
+ASTNodeImporter::VisitPRValueReferenceType(const PRValueReferenceType *T) {
+  // FIXME: Check for C++0x support in "to" context.
+  ExpectedType ToPointeeTypeOrErr = import(T->getPointeeTypeAsWritten());
+  if (!ToPointeeTypeOrErr)
+    return ToPointeeTypeOrErr.takeError();
+
+  return Importer.getToContext().getPRValueReferenceType(*ToPointeeTypeOrErr);
+}
+
+ExpectedType
 ASTNodeImporter::VisitMemberPointerType(const MemberPointerType *T) {
   // FIXME: Check for C++ support in "to" context.
   ExpectedType ToPointeeTypeOrErr = import(T->getPointeeType());
@@ -1246,7 +1256,7 @@ ASTNodeImporter::VisitMemberPointerType(const MemberPointerType *T) {
 
   ExpectedTypePtr ClassTypeOrErr = import(T->getClass());
   if (!ClassTypeOrErr)
-    return ClassTypeOrErr.takeError();
+  return ClassTypeOrErr.takeError();
 
   return Importer.getToContext().getMemberPointerType(*ToPointeeTypeOrErr,
                                                       *ClassTypeOrErr);
