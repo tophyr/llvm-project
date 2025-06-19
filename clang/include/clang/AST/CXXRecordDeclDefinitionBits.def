@@ -36,7 +36,7 @@
 FIELD(UserDeclaredConstructor, 1, NO_MERGE)
 
 /// The user-declared special members which this class has.
-FIELD(UserDeclaredSpecialMembers, 6, NO_MERGE)
+FIELD(UserDeclaredSpecialMembers, 8, NO_MERGE)
 
 /// True when this class is an aggregate.
 FIELD(Aggregate, 1, NO_MERGE)
@@ -147,8 +147,10 @@ FIELD(HasInheritedAssignment, 1, NO_MERGE)
 /// @{
 FIELD(NeedOverloadResolutionForCopyConstructor, 1, NO_MERGE)
 FIELD(NeedOverloadResolutionForMoveConstructor, 1, NO_MERGE)
+FIELD(NeedOverloadResolutionForTempvalConstructor, 1, NO_MERGE)
 FIELD(NeedOverloadResolutionForCopyAssignment, 1, NO_MERGE)
 FIELD(NeedOverloadResolutionForMoveAssignment, 1, NO_MERGE)
+FIELD(NeedOverloadResolutionForTempvalAssignment, 1, NO_MERGE)
 FIELD(NeedOverloadResolutionForDestructor, 1, NO_MERGE)
 /// @}
 
@@ -157,8 +159,10 @@ FIELD(NeedOverloadResolutionForDestructor, 1, NO_MERGE)
 /// @{
 FIELD(DefaultedCopyConstructorIsDeleted, 1, NO_MERGE)
 FIELD(DefaultedMoveConstructorIsDeleted, 1, NO_MERGE)
+FIELD(DefaultedTempvalConstructorIsDeleted, 1, NO_MERGE)
 FIELD(DefaultedCopyAssignmentIsDeleted, 1, NO_MERGE)
 FIELD(DefaultedMoveAssignmentIsDeleted, 1, NO_MERGE)
+FIELD(DefaultedTempvalAssignmentIsDeleted, 1, NO_MERGE)
 FIELD(DefaultedDestructorIsDeleted, 1, NO_MERGE)
 /// @}
 
@@ -168,12 +172,12 @@ FIELD(DefaultedDestructorIsDeleted, 1, NO_MERGE)
 ///
 /// This excludes any user-declared but not user-provided special members
 /// which have been declared but not yet defined.
-FIELD(HasTrivialSpecialMembers, 6, MERGE_OR)
+FIELD(HasTrivialSpecialMembers, 8, MERGE_OR)
 
 /// These bits keep track of the triviality of special functions for the
 /// purpose of calls. Only the bits corresponding to SMF_CopyConstructor,
-/// SMF_MoveConstructor, and SMF_Destructor are meaningful here.
-FIELD(HasTrivialSpecialMembersForCall, 6, MERGE_OR)
+/// SMF_MoveConstructor, SMF_TempvalConstructor, and SMF_Destructor are meaningful here.
+FIELD(HasTrivialSpecialMembersForCall, 8, MERGE_OR)
 
 /// The declared special members of this class which are known to be
 /// non-trivial.
@@ -181,13 +185,13 @@ FIELD(HasTrivialSpecialMembersForCall, 6, MERGE_OR)
 /// This excludes any user-declared but not user-provided special members
 /// which have been declared but not yet defined, and any implicit special
 /// members which have not yet been declared.
-FIELD(DeclaredNonTrivialSpecialMembers, 6, MERGE_OR)
+FIELD(DeclaredNonTrivialSpecialMembers, 8, MERGE_OR)
 
 /// These bits keep track of the declared special members that are
 /// non-trivial for the purpose of calls.
 /// Only the bits corresponding to SMF_CopyConstructor,
-/// SMF_MoveConstructor, and SMF_Destructor are meaningful here.
-FIELD(DeclaredNonTrivialSpecialMembersForCall, 6, MERGE_OR)
+/// SMF_MoveConstructor, SMF_TempvalConstructor, and SMF_Destructor are meaningful here.
+FIELD(DeclaredNonTrivialSpecialMembersForCall, 8, MERGE_OR)
 
 /// True when this class has a destructor with no semantic effect.
 FIELD(HasIrrelevantDestructor, 1, NO_MERGE)
@@ -226,7 +230,7 @@ FIELD(UserProvidedDefaultConstructor, 1, NO_MERGE)
 
 /// The special members which have been declared for this class,
 /// either by the user or implicitly.
-FIELD(DeclaredSpecialMembers, 6, MERGE_OR)
+FIELD(DeclaredSpecialMembers, 8, MERGE_OR)
 
 /// Whether an implicit copy constructor could have a const-qualified
 /// parameter, for initializing virtual bases and for other subobjects.

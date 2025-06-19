@@ -42,6 +42,7 @@
 #include "clang/Sema/ParsedTemplate.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
+#include "clang/Sema/Sema.h"
 #include "clang/Sema/SemaCUDA.h"
 #include "clang/Sema/SemaInternal.h"
 #include "clang/Sema/SemaObjC.h"
@@ -4794,6 +4795,7 @@ enum ImplicitInitializerKind {
   IIK_Default,
   IIK_Copy,
   IIK_Move,
+  IIK_Tempval,
   IIK_Inherit
 };
 
@@ -4890,8 +4892,7 @@ BuildImplicitMemberInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
 
   SourceLocation Loc = Constructor->getLocation();
 
-  if (ImplicitInitKind == IIK_Copy || ImplicitInitKind == IIK_Move) {
-    bool Moving = ImplicitInitKind == IIK_Move;
+  if (ImplicitInitKind == IIK_Copy || ImplicitInitKind == IIK_Move /* || ImplicitInitKind == IIK_Tempval /* TODO */) {
     ParmVarDecl *Param = Constructor->getParamDecl(0);
     QualType ParamType = Param->getType().getNonReferenceType();
 
@@ -4906,9 +4907,11 @@ BuildImplicitMemberInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
 
     SemaRef.MarkDeclRefReferenced(cast<DeclRefExpr>(MemberExprBase));
 
-    if (Moving) {
+    if (ImplicitInitKind == IIK_Move) {
       MemberExprBase = CastForMoving(SemaRef, MemberExprBase);
     }
+    // TODO: should a tempval ctor be able to pass off, and then still use, the parameter?
+    // ** CRITICAL ** how will this work with inherited tempval ctors??
 
     // Build a reference to this field within the parameter.
     CXXScopeSpec SS;
@@ -5057,14 +5060,17 @@ struct BaseAndFieldInfo {
       IIK = IIK_Copy;
     else if (Generated && Ctor->isMoveConstructor())
       IIK = IIK_Move;
+    else if (Generated && Ctor->isTempvalConstructor())
+      IIK = IIK_Tempval;
     else
       IIK = IIK_Default;
   }
 
-  bool isImplicitCopyOrMove() const {
+  bool isImplicitCopyMoveOrTempval() const {
     switch (IIK) {
     case IIK_Copy:
     case IIK_Move:
+    case IIK_Tempval:
       return true;
 
     case IIK_Default:
@@ -5094,8 +5100,8 @@ struct BaseAndFieldInfo {
             ActiveUnionMember.lookup(Record->getCanonicalDecl()))
       return Active != Field->getCanonicalDecl();
 
-    // In an implicit copy or move constructor, ignore any in-class initializer.
-    if (isImplicitCopyOrMove())
+    // In an implicit copy, move, or tempval constructor, ignore any in-class initializer.
+    if (isImplicitCopyMoveOrTempval())
       return true;
 
     // If there's no explicit initialization, the field is active only if it
@@ -5170,7 +5176,7 @@ static bool CollectFieldInitializer(Sema &SemaRef, BaseAndFieldInfo &Info,
   if (Info.isWithinInactiveUnionMember(Field, Indirect))
     return false;
 
-  if (Field->hasInClassInitializer() && !Info.isImplicitCopyOrMove()) {
+  if (Field->hasInClassInitializer() && !Info.isImplicitCopyMoveOrTempval()) {
     ExprResult DIE =
         SemaRef.BuildCXXDefaultInitExpr(Info.Ctor->getLocation(), Field);
     if (DIE.isInvalid())
@@ -5365,7 +5371,7 @@ bool Sema::SetCtorInitializers(CXXConstructorDecl *Constructor, bool AnyErrors,
       // If we're not generating the implicit copy/move constructor, then we'll
       // handle anonymous struct/union fields based on their individual
       // indirect fields.
-      if (F->isAnonymousStructOrUnion() && !Info.isImplicitCopyOrMove())
+      if (F->isAnonymousStructOrUnion() && !Info.isImplicitCopyMoveOrTempval())
         continue;
 
       if (CollectFieldInitializer(*this, Info, F))
@@ -5374,7 +5380,7 @@ bool Sema::SetCtorInitializers(CXXConstructorDecl *Constructor, bool AnyErrors,
     }
 
     // Beyond this point, we only consider default initialization.
-    if (Info.isImplicitCopyOrMove())
+    if (Info.isImplicitCopyMoveOrTempval())
       continue;
 
     if (auto *F = dyn_cast<IndirectFieldDecl>(Mem)) {
@@ -5384,7 +5390,8 @@ bool Sema::SetCtorInitializers(CXXConstructorDecl *Constructor, bool AnyErrors,
         continue;
       }
 
-      // Initialize each field of an anonymous struct individually.
+      // Initialize each 
+      // field of an anonymous struct individually.
       if (CollectFieldInitializer(*this, Info, F->getAnonField(), F))
         HadError = true;
 
@@ -6636,6 +6643,9 @@ Sema::getDefaultedFunctionKind(const FunctionDecl *FD) {
 
       if (Ctor->isMoveConstructor())
         return CXXSpecialMemberKind::MoveConstructor;
+
+      if (Ctor->isTempvalConstructor())
+        return CXXSpecialMemberKind::TempvalConstructor;
     }
 
     if (MD->isCopyAssignmentOperator())
@@ -6643,6 +6653,9 @@ Sema::getDefaultedFunctionKind(const FunctionDecl *FD) {
 
     if (MD->isMoveAssignmentOperator())
       return CXXSpecialMemberKind::MoveAssignment;
+
+    if (MD->isTempvalAssignmentOperator())
+      return CXXSpecialMemberKind::TempvalAssignment;
 
     if (isa<CXXDestructorDecl>(FD))
       return CXXSpecialMemberKind::Destructor;
@@ -6703,6 +6716,12 @@ static void DefineDefaultedFunction(Sema &S, FunctionDecl *FD,
     break;
   case CXXSpecialMemberKind::MoveAssignment:
     S.DefineImplicitMoveAssignment(DefaultLoc, cast<CXXMethodDecl>(FD));
+    break;
+  case CXXSpecialMemberKind::TempvalConstructor:
+    S.DefineImplicitTempvalConstructor(DefaultLoc, cast<CXXConstructorDecl>(FD));
+    break;
+  case CXXSpecialMemberKind::TempvalAssignment:
+    S.DefineImplicitTempvalAssignment(DefaultLoc, cast<CXXMethodDecl>(FD));
     break;
   case CXXSpecialMemberKind::Invalid:
     llvm_unreachable("Invalid special member.");
@@ -7383,11 +7402,13 @@ static bool defaultedSpecialMemberIsConstexpr(
 
   case CXXSpecialMemberKind::CopyConstructor:
   case CXXSpecialMemberKind::MoveConstructor:
+  case CXXSpecialMemberKind::TempvalConstructor:
     // For copy or move constructors, we need to perform overload resolution.
     break;
 
   case CXXSpecialMemberKind::CopyAssignment:
   case CXXSpecialMemberKind::MoveAssignment:
+  case CXXSpecialMemberKind::TempvalAssignment:
     if (!S.getLangOpts().CPlusPlus14)
       return false;
     // In C++1y, we need to perform overload resolution.
@@ -9681,6 +9702,7 @@ bool Sema::ShouldDeleteSpecialMember(CXXMethodDecl *MD,
   if (MD->isImplicit() && (CSM == CXXSpecialMemberKind::CopyConstructor ||
                            CSM == CXXSpecialMemberKind::CopyAssignment)) {
     CXXMethodDecl *UserDeclaredMove = nullptr;
+    CXXMethodDecl *UserDeclaredTempval = nullptr;
 
     // In Microsoft mode up to MSVC 2013, a user-declared move only causes the
     // deletion of the corresponding copy operation, not both copy operations.
@@ -9689,7 +9711,7 @@ bool Sema::ShouldDeleteSpecialMember(CXXMethodDecl *MD,
         getLangOpts().MSVCCompat &&
         !getLangOpts().isCompatibleWithMSVC(LangOptions::MSVC2015);
 
-    if (RD->hasUserDeclaredMoveConstructor() &&
+    if ((RD->hasUserDeclaredMoveConstructor() || RD->hasUserDeclaredTempvalConstructor()) &&
         (!DeletesOnlyMatchingCopy ||
          CSM == CXXSpecialMemberKind::CopyConstructor)) {
       if (!Diagnose) return true;
@@ -9701,8 +9723,16 @@ bool Sema::ShouldDeleteSpecialMember(CXXMethodDecl *MD,
           break;
         }
       }
-      assert(UserDeclaredMove);
-    } else if (RD->hasUserDeclaredMoveAssignment() &&
+      // Find any user-declared tempval constructor.
+      for (auto *I : RD->ctors()) {
+        if (I->isTempvalConstructor()) {
+          UserDeclaredTempval = I;
+          break;
+        }
+      }
+
+      assert(UserDeclaredMove || UserDeclaredTempval);
+    } else if ((RD->hasUserDeclaredMoveAssignment() || RD->hasUserDeclaredTempvalAssignment()) &&
                (!DeletesOnlyMatchingCopy ||
                 CSM == CXXSpecialMemberKind::CopyAssignment)) {
       if (!Diagnose) return true;
@@ -9714,14 +9744,29 @@ bool Sema::ShouldDeleteSpecialMember(CXXMethodDecl *MD,
           break;
         }
       }
-      assert(UserDeclaredMove);
+      // Find any user-declared tempval assignment operator.
+      for (auto *I : RD->methods()) {
+        if (I->isTempvalAssignmentOperator()) {
+          UserDeclaredTempval = I;
+          break;
+        }
+      }
+
+      assert(UserDeclaredMove || UserDeclaredTempval);
     }
 
     if (UserDeclaredMove) {
       Diag(UserDeclaredMove->getLocation(),
-           diag::note_deleted_copy_user_declared_move)
+           diag::note_deleted_copy_user_declared_move_or_tempval)
           << (CSM == CXXSpecialMemberKind::CopyAssignment) << RD
-          << UserDeclaredMove->isMoveAssignmentOperator();
+          << 0 << UserDeclaredMove->isMoveAssignmentOperator();
+      return true;
+    }
+    if (UserDeclaredTempval) {
+      Diag(UserDeclaredTempval->getLocation(),
+           diag::note_deleted_copy_user_declared_move_tempval)
+          << (CSM == CXXSpecialMemberKind::CopyAssignment) << RD
+          << 1 << UserDeclaredTempval->isTempvalAssignmentOperator();
       return true;
     }
   }
@@ -10130,6 +10175,22 @@ bool Sema::SpecialMemberIsTrivial(CXXMethodDecl *MD, CXXSpecialMemberKind CSM,
     const RValueReferenceType *RT =
       Param0->getType()->getAs<RValueReferenceType>();
     if (!RT || RT->getPointeeType().getCVRQualifiers()) {
+      if (Diagnose)
+        Diag(Param0->getLocation(), diag::note_nontrivial_param_type)
+          << Param0->getSourceRange() << Param0->getType()
+          << Context.getRValueReferenceType(Context.getRecordType(RD));
+      return false;
+    }
+    break;
+  }
+
+  case CXXSpecialMemberKind::TempvalConstructor:
+  case CXXSpecialMemberKind::TempvalAssignment: {
+    // TODO: do we care if trivial tempval operations always have non-cv-qualified parameters??
+    const ParmVarDecl *Param0 = MD->getNonObjectParameter(0);
+    const PRValueReferenceType *PRT =
+      Param0->getType()->getAs<PRValueReferenceType>();
+    if (!PRT || PRT->getPointeeType().getCVRQualifiers()) {
       if (Diagnose)
         Diag(Param0->getLocation(), diag::note_nontrivial_param_type)
           << Param0->getSourceRange() << Param0->getType()
@@ -15309,6 +15370,303 @@ static void checkMoveAssignmentForRepeatedMove(Sema &S, CXXRecordDecl *Class,
   }
 }
 
+CXXMethodDecl *Sema::DeclareImplicitTempvalAssignment(CXXRecordDecl *ClassDecl) {
+  assert(ClassDecl->needsImplicitTempvalAssignment());
+
+  DeclaringSpecialMember DSM(*this, ClassDecl,
+                             CXXSpecialMemberKind::TempvalAssignment);
+  if (DSM.isAlreadyBeingDeclared())
+    return nullptr;
+
+  // Note: The following rules are largely analoguous to the tempval
+  // constructor rules.
+
+  QualType ArgType = Context.getTypeDeclType(ClassDecl);
+  ArgType = Context.getElaboratedType(ElaboratedTypeKeyword::None, nullptr,
+                                      ArgType, nullptr);
+  LangAS AS = getDefaultCXXMethodAddrSpace();
+  if (AS != LangAS::Default)
+    ArgType = Context.getAddrSpaceQualType(ArgType, AS);
+  QualType RetType = Context.getLValueReferenceType(ArgType);
+  ArgType = Context.getPRValueReferenceType(ArgType);
+
+  bool Constexpr = defaultedSpecialMemberIsConstexpr(
+      *this, ClassDecl, CXXSpecialMemberKind::TempvalAssignment, false);
+
+  //   An implicitly-declared tempval assignment operator is an inline public
+  //   member of its class.
+  DeclarationName Name = Context.DeclarationNames.getCXXOperatorName(OO_Equal);
+  SourceLocation ClassLoc = ClassDecl->getLocation();
+  DeclarationNameInfo NameInfo(Name, ClassLoc);
+  CXXMethodDecl *TempvalAssignment = CXXMethodDecl::Create(
+      Context, ClassDecl, ClassLoc, NameInfo, QualType(),
+      /*TInfo=*/nullptr, /*StorageClass=*/SC_None,
+      getCurFPFeatures().isFPConstrained(),
+      /*isInline=*/true,
+      Constexpr ? ConstexprSpecKind::Constexpr : ConstexprSpecKind::Unspecified,
+      SourceLocation());
+  TempvalAssignment->setAccess(AS_public);
+  TempvalAssignment->setDefaulted();
+  TempvalAssignment->setImplicit();
+
+  setupImplicitSpecialMemberType(TempvalAssignment, RetType, ArgType);
+
+  if (getLangOpts().CUDA)
+    CUDA().inferTargetForImplicitSpecialMember( // TODO
+        ClassDecl, CXXSpecialMemberKind::TempvalAssignment, TempvalAssignment,
+        /* ConstRHS */ false,
+        /* Diagnose */ false);
+
+  // Add the parameter to the operator.
+  ParmVarDecl *FromParam = ParmVarDecl::Create(Context, TempvalAssignment,
+                                               ClassLoc, ClassLoc,
+                                               /*Id=*/nullptr, ArgType,
+                                               /*TInfo=*/nullptr, SC_None,
+                                               nullptr);
+  TempvalAssignment->setParams(FromParam);
+
+  TempvalAssignment->setTrivial(
+      ClassDecl->needsOverloadResolutionForTempvalAssignment()
+          ? SpecialMemberIsTrivial(TempvalAssignment,
+                                   CXXSpecialMemberKind::TempvalAssignment)
+          : ClassDecl->hasTrivialTempvalAssignment());
+
+  // Note that we have added this copy-assignment operator.
+  ++getASTContext().NumImplicitTempvalAssignmentOperatorsDeclared;
+
+  Scope *S = getScopeForContext(ClassDecl);
+  CheckImplicitSpecialMemberDeclaration(S, TempvalAssignment);
+
+  if (ShouldDeleteSpecialMember(TempvalAssignment,
+                                CXXSpecialMemberKind::TempvalAssignment)) {
+    ClassDecl->setImplicitTempvalAssignmentIsDeleted();
+    SetDeclDeleted(TempvalAssignment, ClassLoc);
+  }
+
+  if (S)
+    PushOnScopeChains(TempvalAssignment, S, false);
+  ClassDecl->addDecl(TempvalAssignment);
+
+  return TempvalAssignment;
+}
+
+void Sema::DefineImplicitTempvalAssignment(SourceLocation CurrentLocation,
+                                           CXXMethodDecl *TempvalAssignOperator) {
+  assert((TempvalAssignOperator->isDefaulted() &&
+          TempvalAssignOperator->isOverloadedOperator() &&
+          TempvalAssignOperator->getOverloadedOperator() == OO_Equal &&
+          !TempvalAssignOperator->doesThisDeclarationHaveABody() &&
+          !TempvalAssignOperator->isDeleted()) &&
+         "DefineImplicitTempvalAssignment called for wrong function");
+  if (TempvalAssignOperator->willHaveBody() || TempvalAssignOperator->isInvalidDecl())
+    return;
+
+  CXXRecordDecl *ClassDecl = TempvalAssignOperator->getParent();
+  if (ClassDecl->isInvalidDecl()) {
+    TempvalAssignOperator->setInvalidDecl();
+    return;
+  }
+
+  SynthesizedFunctionScope Scope(*this, TempvalAssignOperator);
+
+  // The exception specification is needed because we are defining the
+  // function.
+  ResolveExceptionSpec(CurrentLocation,
+                       TempvalAssignOperator->getType()->castAs<FunctionProtoType>());
+
+  // Add a context note for diagnostics produced after this point.
+  Scope.addContextNote(CurrentLocation);
+
+  // The statements that form the synthesized function body.
+  SmallVector<Stmt*, 8> Statements;
+
+  // The parameter for the "other" object, which we are Tempval from.
+  ParmVarDecl *Other = TempvalAssignOperator->getNonObjectParameter(0);
+  QualType OtherRefType =
+      Other->getType()->castAs<RValueReferenceType>()->getPointeeType();
+
+  // Our location for everything implicitly-generated.
+  SourceLocation Loc = TempvalAssignOperator->getEndLoc().isValid()
+                           ? TempvalAssignOperator->getEndLoc()
+                           : TempvalAssignOperator->getLocation();
+
+  // Builds a reference to the "other" object.
+  RefBuilder OtherRef(Other, OtherRefType);
+  // Cast to rvalue.
+  TempvalCastBuilder TempvalOther(OtherRef);
+
+  // Builds the function object parameter.
+  std::optional<ThisBuilder> This;
+  std::optional<DerefBuilder> DerefThis;
+  std::optional<RefBuilder> ExplicitObject;
+  QualType ObjectType;
+  bool IsArrow = false;
+  if (TempvalAssignOperator->isExplicitObjectMemberFunction()) {
+    ObjectType = TempvalAssignOperator->getParamDecl(0)->getType();
+    if (ObjectType->isReferenceType())
+      ObjectType = ObjectType->getPointeeType();
+    ExplicitObject.emplace(TempvalAssignOperator->getParamDecl(0), ObjectType);
+  } else {
+    ObjectType = getCurrentThisType();
+    This.emplace();
+    DerefThis.emplace(*This);
+    IsArrow = !getLangOpts().HLSL;
+  }
+  ExprBuilder &ObjectParameter =
+      ExplicitObject ? *ExplicitObject : static_cast<ExprBuilder &>(*This);
+
+  // Assign base classes.
+  bool Invalid = false;
+  for (auto &Base : ClassDecl->bases()) {
+    // C++11 [class.copy]p28:
+    //   It is unspecified whether subobjects representing virtual base classes
+    //   are assigned more than once by the implicitly-defined copy assignment
+    //   operator.
+    // FIXME: Do not assign to a vbase that will be assigned by some other base
+    // class. For a Tempval-assignment, this can result in the vbase being Tempvald
+    // multiple times.
+
+    // Form the assignment:
+    //   static_cast<Base*>(this)->Base::operator=(static_cast<Base&&>(other));
+    QualType BaseType = Base.getType().getUnqualifiedType();
+    if (!BaseType->isRecordType()) {
+      Invalid = true;
+      continue;
+    }
+
+    CXXCastPath BasePath;
+    BasePath.push_back(&Base);
+
+    // Construct the "from" expression, which is an implicit cast to the
+    // appropriately-qualified base type.
+    CastBuilder From(OtherRef, BaseType, VK_XValue, BasePath);
+
+    // Implicitly cast "this" to the appropriately-qualified base type.
+    // Dereference "this".
+    CastBuilder To(
+        ExplicitObject ? static_cast<ExprBuilder &>(*ExplicitObject)
+                       : static_cast<ExprBuilder &>(*DerefThis),
+        Context.getQualifiedType(BaseType, ObjectType.getQualifiers()),
+        VK_LValue, BasePath);
+
+    // Build the Tempval.
+    StmtResult Tempval = buildSingleCopyAssign(*this, Loc, BaseType,
+                                            To, From,
+                                            /*CopyingBaseSubobject=*/true,
+                                            /*Copying=*/false);
+    if (Tempval.isInvalid()) {
+      TempvalAssignOperator->setInvalidDecl();
+      return;
+    }
+
+    // Success! Record the Tempval.
+    Statements.push_back(Tempval.getAs<Expr>());
+  }
+
+  // Assign non-static members.
+  for (auto *Field : ClassDecl->fields()) {
+    // FIXME: We should form some kind of AST representation for the implied
+    // memcpy in a union copy operation.
+    if (Field->isUnnamedBitField() || Field->getParent()->isUnion())
+      continue;
+
+    if (Field->isInvalidDecl()) {
+      Invalid = true;
+      continue;
+    }
+
+    // Check for members of reference type; we can't Tempval those.
+    if (Field->getType()->isReferenceType()) {
+      Diag(ClassDecl->getLocation(), diag::err_uninitialized_member_for_assign)
+        << Context.getTagDeclType(ClassDecl) << 0 << Field->getDeclName();
+      Diag(Field->getLocation(), diag::note_declared_at);
+      Invalid = true;
+      continue;
+    }
+
+    // Check for members of const-qualified, non-class type.
+    QualType BaseType = Context.getBaseElementType(Field->getType());
+    if (!BaseType->getAs<RecordType>() && BaseType.isConstQualified()) {
+      Diag(ClassDecl->getLocation(), diag::err_uninitialized_member_for_assign)
+        << Context.getTagDeclType(ClassDecl) << 1 << Field->getDeclName();
+      Diag(Field->getLocation(), diag::note_declared_at);
+      Invalid = true;
+      continue;
+    }
+
+    // Suppress assigning zero-width bitfields.
+    if (Field->isZeroLengthBitField())
+      continue;
+
+    QualType FieldType = Field->getType().getNonReferenceType();
+    if (FieldType->isIncompleteArrayType()) {
+      assert(ClassDecl->hasFlexibleArrayMember() &&
+             "Incomplete array type is not valid");
+      continue;
+    }
+
+    // Build references to the field in the object we're copying from and to.
+    LookupResult MemberLookup(*this, Field->getDeclName(), Loc,
+                              LookupMemberName);
+    MemberLookup.addDecl(Field);
+    MemberLookup.resolveKind();
+    MemberBuilder From(TempvalOther, OtherRefType,
+                       /*IsArrow=*/false, MemberLookup);
+    MemberBuilder To(ObjectParameter, ObjectType, IsArrow, MemberLookup);
+
+    assert(!From.build(*this, Loc)->isLValue() && // could be xvalue or prvalue
+        "Member reference with rvalue base must be rvalue except for reference "
+        "members, which aren't allowed for Tempval assignment.");
+
+    // Build the Tempval of this field.
+    StmtResult Tempval = buildSingleCopyAssign(*this, Loc, FieldType,
+                                            To, From,
+                                            /*CopyingBaseSubobject=*/false,
+                                            /*Copying=*/false);
+    if (Tempval.isInvalid()) {
+      TempvalAssignOperator->setInvalidDecl();
+      return;
+    }
+
+    // Success! Record the copy.
+    Statements.push_back(Tempval.getAs<Stmt>());
+  }
+
+  if (!Invalid) {
+    // Add a "return *this;"
+    Expr *ThisExpr =
+        (ExplicitObject  ? static_cast<ExprBuilder &>(*ExplicitObject)
+         : LangOpts.HLSL ? static_cast<ExprBuilder &>(*This)
+                         : static_cast<ExprBuilder &>(*DerefThis))
+            .build(*this, Loc);
+
+    StmtResult Return = BuildReturnStmt(Loc, ThisExpr);
+    if (Return.isInvalid())
+      Invalid = true;
+    else
+      Statements.push_back(Return.getAs<Stmt>());
+  }
+
+  if (Invalid) {
+    TempvalAssignOperator->setInvalidDecl();
+    return;
+  }
+
+  StmtResult Body;
+  {
+    CompoundScopeRAII CompoundScope(*this);
+    Body = ActOnCompoundStmt(Loc, Loc, Statements,
+                             /*isStmtExpr=*/false);
+    assert(!Body.isInvalid() && "Compound statement creation cannot fail");
+  }
+  TempvalAssignOperator->setBody(Body.getAs<Stmt>());
+  TempvalAssignOperator->markUsed(Context);
+
+  if (ASTMutationListener *L = getASTMutationListener()) {
+    L->CompletedImplicitDefinition(TempvalAssignOperator);
+  }
+}
+
 void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
                                         CXXMethodDecl *MoveAssignOperator) {
   assert((MoveAssignOperator->isDefaulted() &&
@@ -15816,6 +16174,137 @@ void Sema::DefineImplicitMoveConstructor(SourceLocation CurrentLocation,
 
   if (ASTMutationListener *L = getASTMutationListener()) {
     L->CompletedImplicitDefinition(MoveConstructor);
+  }
+}
+
+CXXConstructorDecl *Sema::DeclareImplicitTempvalConstructor(
+                                                    CXXRecordDecl *ClassDecl) {
+  assert(ClassDecl->needsImplicitTempvalConstructor());
+
+  DeclaringSpecialMember DSM(*this, ClassDecl,
+                             CXXSpecialMemberKind::TempvalConstructor);
+  if (DSM.isAlreadyBeingDeclared())
+    return nullptr;
+
+  QualType ClassType = Context.getTypeDeclType(ClassDecl);
+
+  QualType ArgType = ClassType;
+  ArgType = Context.getElaboratedType(ElaboratedTypeKeyword::None, nullptr,
+                                      ArgType, nullptr);
+  LangAS AS = getDefaultCXXMethodAddrSpace();
+  if (AS != LangAS::Default)
+    ArgType = Context.getAddrSpaceQualType(ClassType, AS);
+  ArgType = Context.getPRValueReferenceType(ArgType);
+
+  bool Constexpr = defaultedSpecialMemberIsConstexpr(
+      *this, ClassDecl, CXXSpecialMemberKind::TempvalConstructor, false);
+
+  DeclarationName Name
+    = Context.DeclarationNames.getCXXConstructorName(
+                                           Context.getCanonicalType(ClassType));
+  SourceLocation ClassLoc = ClassDecl->getLocation();
+  DeclarationNameInfo NameInfo(Name, ClassLoc);
+
+  // C++11 [class.copy]p11:
+  //   An implicitly-declared copy/move constructor is an inline public
+  //   member of its class.
+  CXXConstructorDecl *TempvalConstructor = CXXConstructorDecl::Create(
+      Context, ClassDecl, ClassLoc, NameInfo, QualType(), /*TInfo=*/nullptr,
+      ExplicitSpecifier(), getCurFPFeatures().isFPConstrained(),
+      /*isInline=*/true,
+      /*isImplicitlyDeclared=*/true,
+      Constexpr ? ConstexprSpecKind::Constexpr
+                : ConstexprSpecKind::Unspecified);
+  TempvalConstructor->setAccess(AS_public);
+  TempvalConstructor->setDefaulted();
+
+  setupImplicitSpecialMemberType(TempvalConstructor, Context.VoidTy, ArgType);
+
+  if (getLangOpts().CUDA)
+    CUDA().inferTargetForImplicitSpecialMember(
+        ClassDecl, CXXSpecialMemberKind::TempvalConstructor, TempvalConstructor,
+        /* ConstRHS */ false,
+        /* Diagnose */ false);
+
+  // Add the parameter to the constructor.
+  ParmVarDecl *FromParam = ParmVarDecl::Create(Context, TempvalConstructor,
+                                               ClassLoc, ClassLoc,
+                                               /*IdentifierInfo=*/nullptr,
+                                               ArgType, /*TInfo=*/nullptr,
+                                               SC_None, nullptr);
+  TempvalConstructor->setParams(FromParam);
+
+  TempvalConstructor->setTrivial(
+      ClassDecl->needsOverloadResolutionForTempvalConstructor()
+          ? SpecialMemberIsTrivial(TempvalConstructor,
+                                   CXXSpecialMemberKind::TempvalConstructor)
+          : ClassDecl->hasTrivialTempvalConstructor());
+
+  TempvalConstructor->setTrivialForCall(
+      ClassDecl->hasAttr<TrivialABIAttr>() ||
+      (ClassDecl->needsOverloadResolutionForTempvalConstructor()
+           ? SpecialMemberIsTrivial(TempvalConstructor,
+                                    CXXSpecialMemberKind::TempvalConstructor,
+                                    TAH_ConsiderTrivialABI)
+           : ClassDecl->hasTrivialTempvalConstructorForCall()));
+
+  // Note that we have declared this constructor.
+  ++getASTContext().NumImplicitTempvalConstructorsDeclared;
+
+  Scope *S = getScopeForContext(ClassDecl);
+  CheckImplicitSpecialMemberDeclaration(S, TempvalConstructor);
+
+  if (ShouldDeleteSpecialMember(TempvalConstructor,
+                                CXXSpecialMemberKind::TempvalConstructor)) {
+    ClassDecl->setImplicitTempvalConstructorIsDeleted();
+    SetDeclDeleted(TempvalConstructor, ClassLoc);
+  }
+
+  if (S)
+    PushOnScopeChains(TempvalConstructor, S, false);
+  ClassDecl->addDecl(TempvalConstructor);
+
+  return TempvalConstructor;
+}
+
+void Sema::DefineImplicitTempvalConstructor(SourceLocation CurrentLocation,
+                                         CXXConstructorDecl *TempvalConstructor) {
+  assert((TempvalConstructor->isDefaulted() &&
+          TempvalConstructor->isTempvalConstructor() &&
+          !TempvalConstructor->doesThisDeclarationHaveABody() &&
+          !TempvalConstructor->isDeleted()) &&
+         "DefineImplicitTempvalConstructor - call it for implicit Tempval ctor");
+  if (TempvalConstructor->willHaveBody() || TempvalConstructor->isInvalidDecl())
+    return;
+
+  CXXRecordDecl *ClassDecl = TempvalConstructor->getParent();
+  assert(ClassDecl && "DefineImplicitTempvalConstructor - invalid constructor");
+
+  SynthesizedFunctionScope Scope(*this, TempvalConstructor);
+
+  // The exception specification is needed because we are defining the
+  // function.
+  ResolveExceptionSpec(CurrentLocation,
+                       TempvalConstructor->getType()->castAs<FunctionProtoType>());
+  MarkVTableUsed(CurrentLocation, ClassDecl);
+
+  // Add a context note for diagnostics produced after this point.
+  Scope.addContextNote(CurrentLocation);
+
+  if (SetCtorInitializers(TempvalConstructor, /*AnyErrors=*/false)) {
+    TempvalConstructor->setInvalidDecl();
+  } else {
+    SourceLocation Loc = TempvalConstructor->getEndLoc().isValid()
+                             ? TempvalConstructor->getEndLoc()
+                             : TempvalConstructor->getLocation();
+    Sema::CompoundScopeRAII CompoundScope(*this);
+    TempvalConstructor->setBody(
+        ActOnCompoundStmt(Loc, Loc, {}, /*isStmtExpr=*/false).getAs<Stmt>());
+    TempvalConstructor->markUsed(Context);
+  }
+
+  if (ASTMutationListener *L = getASTMutationListener()) {
+    L->CompletedImplicitDefinition(TempvalConstructor);
   }
 }
 

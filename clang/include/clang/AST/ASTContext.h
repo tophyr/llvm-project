@@ -3407,6 +3407,13 @@ public:
   /// which declarations were built.
   unsigned NumImplicitMoveConstructorsDeclared = 0;
 
+  /// The number of implicitly-declared tempval constructors.
+  unsigned NumImplicitTempvalConstructors = 0;
+
+  /// The number of implicitly-declared tempval constructors for
+  /// which declarations were built.
+  unsigned NumImplicitTempvalConstructorsDeclared = 0;
+
   /// The number of implicitly-declared copy assignment operators.
   unsigned NumImplicitCopyAssignmentOperators = 0;
 
@@ -3420,6 +3427,13 @@ public:
   /// The number of implicitly-declared move assignment operators for
   /// which declarations were built.
   unsigned NumImplicitMoveAssignmentOperatorsDeclared = 0;
+
+  /// The number of implicitly-declared tempval assignment operators.
+  unsigned NumImplicitTempvalAssignmentOperators = 0;
+
+  /// The number of implicitly-declared tempval assignment operators for
+  /// which declarations were built.
+  unsigned NumImplicitTempvalAssignmentOperatorsDeclared = 0;
 
   /// The number of implicitly-declared destructors.
   unsigned NumImplicitDestructors = 0;

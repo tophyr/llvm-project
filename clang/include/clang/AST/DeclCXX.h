@@ -275,10 +275,12 @@ class CXXRecordDecl : public RecordDecl {
     SMF_DefaultConstructor = 0x1,
     SMF_CopyConstructor = 0x2,
     SMF_MoveConstructor = 0x4,
-    SMF_CopyAssignment = 0x8,
-    SMF_MoveAssignment = 0x10,
-    SMF_Destructor = 0x20,
-    SMF_All = 0x3f
+    SMF_TempvalConstructor = 0x8,
+    SMF_CopyAssignment = 0x10,
+    SMF_MoveAssignment = 0x20,
+    SMF_TempvalAssignment = 0x40,
+    SMF_Destructor = 0x80,
+    SMF_All = 0xff
   };
 
 public:
@@ -859,10 +861,22 @@ public:
     return data().UserDeclaredSpecialMembers & SMF_MoveConstructor;
   }
 
+  /// Determine whether this class has had a move constructor
+  /// declared by the user.
+  bool hasUserDeclaredTempvalConstructor() const {
+    return data().UserDeclaredSpecialMembers & SMF_TempvalConstructor;
+  }
+
   /// Determine whether this class has a move constructor.
   bool hasMoveConstructor() const {
     return (data().DeclaredSpecialMembers & SMF_MoveConstructor) ||
            needsImplicitMoveConstructor();
+  }
+
+  /// Determine whether this class has a tempval constructor.
+  bool hasTempvalConstructor() const {
+    return (data().DeclaredSpecialMembers & SMF_TempvalConstructor) ||
+           needsImplicitTempvalConstructor();
   }
 
   /// Set that we attempted to declare an implicit copy
@@ -881,6 +895,15 @@ public:
             needsOverloadResolutionForMoveConstructor()) &&
            "move constructor should not be deleted");
     data().DefaultedMoveConstructorIsDeleted = true;
+  }
+
+  /// Set that we attempted to declare an implicit move
+  /// constructor, but overload resolution failed so we deleted it.
+  void setImplicitTempvalConstructorIsDeleted() {
+    assert((data().DefaultedTempvalConstructorIsDeleted ||
+            needsOverloadResolutionForTempvalConstructor()) &&
+           "move constructor should not be deleted");
+    data().DefaultedTempvalConstructorIsDeleted = true;
   }
 
   /// Set that we attempted to declare an implicit destructor,
@@ -909,10 +932,28 @@ public:
            !hasUserDeclaredDestructor();
   }
 
+  /// Determine whether this class should get an implicit move
+  /// constructor or if any existing special member function inhibits this.
+  bool needsImplicitTempvalConstructor() const {
+    return !(data().DeclaredSpecialMembers & SMF_TempvalConstructor) &&
+           !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveAssignment() &&
+           !hasUserDeclaredDestructor() &&
+           !hasUserDeclaredTempvalConstructor() && // TODO: think these through
+           !hasUserDeclaredTempvalAssignment();
+  }
+
   /// Determine whether we need to eagerly declare a defaulted move
   /// constructor for this class.
   bool needsOverloadResolutionForMoveConstructor() const {
     return data().NeedOverloadResolutionForMoveConstructor;
+  }
+
+  /// Determine whether we need to eagerly declare a defaulted move
+  /// constructor for this class.
+  bool needsOverloadResolutionForTempvalConstructor() const {
+    return data().NeedOverloadResolutionForTempvalConstructor;
   }
 
   /// Determine whether this class has a user-declared copy assignment
@@ -974,6 +1015,18 @@ public:
     return data().UserDeclaredSpecialMembers & SMF_MoveAssignment;
   }
 
+  /// Determine whether this class has had a move assignment
+  /// declared by the user.
+  bool hasUserDeclaredTempvalAssignment() const {
+    return data().UserDeclaredSpecialMembers & SMF_TempvalAssignment;
+  }
+
+  /// Determine whether this class has a move assignment operator.
+  bool hasTempvalAssignment() const {
+    return (data().DeclaredSpecialMembers & SMF_TempvalAssignment) ||
+           needsImplicitTempvalAssignment();
+  }
+
   /// Determine whether this class has a move assignment operator.
   bool hasMoveAssignment() const {
     return (data().DeclaredSpecialMembers & SMF_MoveAssignment) ||
@@ -989,6 +1042,15 @@ public:
     data().DefaultedMoveAssignmentIsDeleted = true;
   }
 
+  /// Set that we attempted to declare an implicit move assignment
+  /// operator, but overload resolution failed so we deleted it.
+  void setImplicitTempvalAssignmentIsDeleted() {
+    assert((data().DefaultedTempvalAssignmentIsDeleted ||
+            needsOverloadResolutionForTempvalAssignment()) &&
+           "tempval assignment should not be deleted");
+    data().DefaultedTempvalAssignmentIsDeleted = true;
+  }
+
   /// Determine whether this class should get an implicit move
   /// assignment operator or if any existing special member function inhibits
   /// this.
@@ -1001,10 +1063,30 @@ public:
            (!isLambda() || lambdaIsDefaultConstructibleAndAssignable());
   }
 
+  /// Determine whether this class should get an implicit move
+  /// assignment operator or if any existing special member function inhibits
+  /// this.
+  bool needsImplicitTempvalAssignment() const {
+    return !(data().DeclaredSpecialMembers & SMF_TempvalAssignment) &&
+           !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveConstructor() &&
+           !hasUserDeclaredMoveAssignment() &&
+           !hasUserDeclaredTempvalConstructor() &&
+           !hasUserDeclaredDestructor() &&
+           (!isLambda() || lambdaIsDefaultConstructibleAndAssignable());
+  }
+
   /// Determine whether we need to eagerly declare a move assignment
   /// operator for this class.
   bool needsOverloadResolutionForMoveAssignment() const {
     return data().NeedOverloadResolutionForMoveAssignment;
+  }
+
+  /// Determine whether we need to eagerly declare a move assignment
+  /// operator for this class.
+  bool needsOverloadResolutionForTempvalAssignment() const {
+    return data().NeedOverloadResolutionForTempvalAssignment;
   }
 
   /// Determine whether this class has a user-declared destructor.
@@ -1320,6 +1402,18 @@ public:
            (data().HasTrivialSpecialMembersForCall & SMF_MoveConstructor);
   }
 
+  /// Determine whether this class has a trivial move constructor
+  /// (C++11 [class.copy]p12)
+  bool hasTrivialTempvalConstructor() const {
+    return hasTempvalConstructor() &&
+           (data().HasTrivialSpecialMembers & SMF_TempvalConstructor);
+  }
+
+  bool hasTrivialTempvalConstructorForCall() const {
+    return hasTempvalConstructor() &&
+           (data().HasTrivialSpecialMembersForCall & SMF_TempvalConstructor);
+  }
+
   /// Determine whether this class has a non-trivial move constructor
   /// (C++11 [class.copy]p12)
   bool hasNonTrivialMoveConstructor() const {
@@ -1353,6 +1447,13 @@ public:
   bool hasTrivialMoveAssignment() const {
     return hasMoveAssignment() &&
            (data().HasTrivialSpecialMembers & SMF_MoveAssignment);
+  }
+
+  /// Determine whether this class has a trivial move assignment operator
+  /// (C++11 [class.copy]p25)
+  bool hasTrivialTempvalAssignment() const {
+    return hasTempvalAssignment() &&
+           (data().HasTrivialSpecialMembers & SMF_TempvalAssignment);
   }
 
   /// Determine whether this class has a non-trivial move assignment
@@ -2210,6 +2311,8 @@ public:
   /// Determine whether this is a move assignment operator.
   bool isMoveAssignmentOperator() const;
 
+  bool isTempvalAssignmentOperator() const;
+
   CXXMethodDecl *getCanonicalDecl() override {
     return cast<CXXMethodDecl>(FunctionDecl::getCanonicalDecl());
   }
@@ -2784,11 +2887,18 @@ public:
   /// to the type qualifiers on the referent of the first parameter's type.
   bool isMoveConstructor(unsigned &TypeQuals) const;
 
+  bool isTempvalConstructor(unsigned &TypeQuals) const;
+
   /// Determine whether this constructor is a move constructor
   /// (C++11 [class.copy]p3), which can be used to move values of the class.
   bool isMoveConstructor() const {
     unsigned TypeQuals = 0;
     return isMoveConstructor(TypeQuals);
+  }
+
+  bool isTempvalConstructor() const {
+    unsigned TypeQuals = 0;
+    return isTempvalConstructor(TypeQuals);
   }
 
   /// Determine whether this is a copy or move constructor.

@@ -2554,6 +2554,7 @@ public:
   bool isReferenceType() const;
   bool isLValueReferenceType() const;
   bool isRValueReferenceType() const;
+  bool isPRValueReferenceType() const;
   bool isObjectPointerType() const;
   bool isFunctionPointerType() const;
   bool isFunctionReferenceType() const;
@@ -8244,6 +8245,10 @@ inline bool Type::isLValueReferenceType() const {
 
 inline bool Type::isRValueReferenceType() const {
   return isa<RValueReferenceType>(CanonicalType);
+}
+
+inline bool Type::isPRValueReferenceType() const {
+  return isa<PRValueReferenceType>(CanonicalType);
 }
 
 inline bool Type::isObjectPointerType() const {

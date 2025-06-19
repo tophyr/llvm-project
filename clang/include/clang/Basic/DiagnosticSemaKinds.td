@@ -6140,9 +6140,9 @@ def note_deleted_default_ctor_all_const : Note<
 def note_deleted_copy_ctor_rvalue_reference : Note<
   "copy constructor of %0 is implicitly deleted because field %1 is of "
   "rvalue reference type %2">;
-def note_deleted_copy_user_declared_move : Note<
+def note_deleted_copy_user_declared_move_or_tempval : Note<
   "copy %select{constructor|assignment operator}0 is implicitly deleted because"
-  " %1 has a user-declared move %select{constructor|assignment operator}2">;
+  " %1 has a user-declared %select{move|tempval} %select{constructor|assignment operator}2">;
 def note_deleted_assign_field : Note<
   "%select{copy|move}0 assignment operator of %1 is implicitly deleted "
   "because field %2 is of %select{reference|const-qualified}4 type %3">;

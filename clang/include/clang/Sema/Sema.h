@@ -425,8 +425,10 @@ enum class CXXSpecialMemberKind {
   DefaultConstructor,
   CopyConstructor,
   MoveConstructor,
+  TempvalConstructor,
   CopyAssignment,
   MoveAssignment,
+  TempvalAssignment,
   Destructor,
   Invalid
 };
@@ -5156,6 +5158,20 @@ public:
   void DefineImplicitMoveConstructor(SourceLocation CurrentLocation,
                                      CXXConstructorDecl *Constructor);
 
+  /// Declare the implicit tempval constructor for the given class.
+  ///
+  /// \param ClassDecl The Class declaration into which the implicit
+  /// tempval constructor will be added.
+  ///
+  /// \returns The implicitly-declared tempval constructor, or NULL if it wasn't
+  /// declared.
+  CXXConstructorDecl *DeclareImplicitTempvalConstructor(CXXRecordDecl *ClassDecl);
+
+  /// DefineImplicitTempvalConstructor - Checks for feasibility of
+  /// defining this constructor as the tempval constructor.
+  void DefineImplicitTempvalConstructor(SourceLocation CurrentLocation,
+                                        CXXConstructorDecl *Constructor);
+
   /// Declare the implicit copy assignment operator for the given class.
   ///
   /// \param ClassDecl The class declaration into which the implicit
@@ -5180,6 +5196,19 @@ public:
   /// Defines an implicitly-declared move assignment operator.
   void DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
                                     CXXMethodDecl *MethodDecl);
+
+  /// Declare the implicit tempval assignment operator for the given class.
+  ///
+  /// \param ClassDecl The Class declaration into which the implicit
+  /// tempval assignment operator will be added.
+  ///
+  /// \returns The implicitly-declared tempval assignment operator, or NULL if it
+  /// wasn't declared.
+  CXXMethodDecl *DeclareImplicitTempvalAssignment(CXXRecordDecl *ClassDecl);
+
+  /// Defines an implicitly-declared tempval assignment operator.
+  void DefineImplicitTempvalAssignment(SourceLocation CurrentLocation,
+                                       CXXMethodDecl *MethodDecl);
 
   /// Check a completed declaration of an implicit special member.
   void CheckImplicitSpecialMemberDeclaration(Scope *S, FunctionDecl *FD);

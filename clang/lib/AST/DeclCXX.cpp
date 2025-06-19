@@ -2645,6 +2645,27 @@ bool CXXMethodDecl::isMoveAssignmentOperator() const {
   return Context.hasSameUnqualifiedType(ClassType, ParamType);
 }
 
+bool CXXMethodDecl::isTempvalAssignmentOperator() const {
+  // C++0x [class.copy]p19:
+  //  A user-declared move assignment operator X::operator= is a non-static
+  //  non-template member function of class X with exactly one parameter of type
+  //  X&&, const X&&, volatile X&&, or const volatile X&&.
+  if (getOverloadedOperator() != OO_Equal || isStatic() ||
+      getPrimaryTemplate() || getDescribedFunctionTemplate() ||
+      getNumExplicitParams() != 1)
+    return false;
+
+  QualType ParamType = getNonObjectParameter(0)->getType();
+  if (!ParamType->isPRValueReferenceType())
+    return false;
+  ParamType = ParamType->getPointeeType();
+
+  ASTContext &Context = getASTContext();
+  QualType ClassType
+    = Context.getCanonicalType(Context.getTypeDeclType(getParent()));
+  return Context.hasSameUnqualifiedType(ClassType, ParamType);
+}
+
 void CXXMethodDecl::addOverriddenMethod(const CXXMethodDecl *MD) {
   assert(MD->isCanonicalDecl() && "Method is not canonical!");
   assert(MD->isVirtual() && "Method is not virtual!");
@@ -2904,6 +2925,11 @@ CXXConstructorDecl::isCopyConstructor(unsigned &TypeQuals) const {
 bool CXXConstructorDecl::isMoveConstructor(unsigned &TypeQuals) const {
   return isCopyOrMoveConstructor(TypeQuals) &&
          getParamDecl(0)->getType()->isRValueReferenceType();
+}
+
+bool CXXConstructorDecl::isTempvalConstructor(unsigned &TypeQuals) const {
+  return isCopyOrMoveConstructor(TypeQuals) && // TODO
+         getParamDecl(0)->getType()->isPRValueReferenceType();
 }
 
 /// Determine whether this is a copy or move constructor.
