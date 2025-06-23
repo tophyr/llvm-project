@@ -1,0 +1,12 @@
+ensure disclaim-result prvalue is the address of the given lvalue (OR destroys the lvalue when it is destroyed?)
+force prvalue-operator= to be { ~T(); memcpy(this, other); operator disclaim(*this, other); }
+make delete return prvalue
+
+only way to disclaim a parameter is to make the parameter an optional
+
+make sure prvalue forwarding reference gets treated as a pure prvalue?
+
+may require just biting bullet and making prvalue a markable object
+    symbol can only be used once?
+        what about &&~-qualified member calls - do they see decltype(this) == T&&~* ?
+            can we just not &&~-qualify members?
