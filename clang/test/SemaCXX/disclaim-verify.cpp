@@ -12,6 +12,32 @@ struct MoveOnly {
   int val_;
 };
 
+struct Immovable {
+  Immovable(int val)
+    : val_{val} {}
+  
+  MoveOnly(const MoveOnly&) = delete;
+  MoveOnly(MoveOnly&&) = delete;
+  MoveOnly& operator=(const MoveOnly&) = delete;
+  MoveObly& operator=(MoveOnly&&) = delete;
+
+  int val_;
+};
+
+struct OnlyDisclaimable {
+  Immovable(int val)
+    : val_{val} {}
+  
+  MoveOnly(const MoveOnly&) = delete;
+  MoveOnly(MoveOnly&&) = delete;
+  MoveOnly& operator=(const MoveOnly&) = delete;
+  MoveObly& operator=(MoveOnly&&) = delete;
+
+  operator disclaim(OnlyDisclaimable& dest, OnlyDisclaimable const& src);
+
+  int val_;
+};
+
 void testIsMoveLike() {
   MoveOnly a{5};
   MoveOnly b = disclaim a;
@@ -243,4 +269,14 @@ void testRangeFor() {
   for (int a : x) {
     disclaim a;                // expected-error {{cannot disclaim a variable not defined in the same scope}}
   }
+}
+
+void testImmovable() {
+  Immovable a{42};
+  auto b = disclaim a;        // expected-error {{Immovable has a default-deleted operator disclaim because its move constructor is deleted}}
+}
+
+void testOnlyDisclaimable() {
+  OnlyDisclaimable a{42};
+  auto b = disclaim a;
 }
