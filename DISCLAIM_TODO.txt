@@ -1,6 +1,9 @@
 ensure disclaim-result prvalue is the address of the given lvalue (OR destroys the lvalue when it is destroyed?)
 force prvalue-operator= to be { ~T(); memcpy(this, other); operator disclaim(*this, other); }
+
 make delete return prvalue
+    needs to be a disclaiming-delete
+        provide a default impl so objects don't have to opt-in
 
 only way to disclaim a parameter is to make the parameter an optional
 
