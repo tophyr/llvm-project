@@ -12,30 +12,15 @@ struct MoveOnly {
   int val_;
 };
 
-struct Immovable {
-  Immovable(int val)
-    : val_{val} {}
-  
-  MoveOnly(const MoveOnly&) = delete;
-  MoveOnly(MoveOnly&&) = delete;
+struct Immovable : MoveOnly {
+  using MoveOnly::MoveOnly;
   MoveOnly& operator=(const MoveOnly&) = delete;
   MoveObly& operator=(MoveOnly&&) = delete;
-
-  int val_;
 };
 
-struct OnlyDisclaimable {
-  Immovable(int val)
-    : val_{val} {}
-  
-  MoveOnly(const MoveOnly&) = delete;
-  MoveOnly(MoveOnly&&) = delete;
-  MoveOnly& operator=(const MoveOnly&) = delete;
-  MoveObly& operator=(MoveOnly&&) = delete;
-
+struct OnlyDisclaimable : Immovable {
+  using Immovable::Immovable;
   operator disclaim(OnlyDisclaimable& dest, OnlyDisclaimable const& src);
-
-  int val_;
 };
 
 void testIsMoveLike() {
