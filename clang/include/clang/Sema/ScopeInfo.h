@@ -62,6 +62,28 @@ class VarDecl;
 
 namespace sema {
 
+struct RelocationState {
+  llvm::SmallDenseMap<const ValueDecl *, SourceLocation, 8> RelocatedDecls;
+  llvm::SmallDenseMap<const ValueDecl *,
+                      llvm::SmallDenseMap<const NamedDecl *, SourceLocation, 4>,
+                      8>
+      RelocatedSubobjects;
+};
+
+struct RelocationUseSite {
+  const Stmt *Site = nullptr;
+  const ValueDecl *Root = nullptr;
+  const NamedDecl *Subobject = nullptr;
+  SourceLocation Loc;
+};
+
+struct RelocationEvent {
+  const Stmt *Site = nullptr;
+  const ValueDecl *Root = nullptr;
+  const NamedDecl *Subobject = nullptr;
+  SourceLocation Loc;
+};
+
 /// Contains information about the compound statement currently being
 /// parsed.
 class CompoundScopeInfo {
@@ -166,6 +188,10 @@ public:
   /// false if there is an invocation of an initializer on 'self'.
   bool ObjCWarnForNoInitDelegation : 1;
 
+  /// True if an error diagnostic was emitted while this function scope
+  /// was active.
+  bool HadAnyError : 1;
+
   /// True only when this function has not already built, or attempted
   /// to build, the initial and final coroutine suspend points
   bool NeedsCoroutineSuspends : 1;
@@ -196,8 +222,10 @@ public:
   SourceLocation FirstVLALoc;
 
 private:
+  DiagnosticsEngine *DiagEngine = nullptr;
   /// Used to determine if errors occurred in this function or block.
   DiagnosticErrorTrap ErrorTrap;
+  unsigned NumErrorsAtStart = 0;
 
 public:
   /// A SwitchStmt, along with a flag indicating if its list of case statements
@@ -385,6 +413,16 @@ private:
   /// Part of the implementation of -Wrepeated-use-of-weak.
   WeakObjectUseMap WeakObjectUses;
 
+  /// The source locations of lifetime-ending relocations for local variables
+  /// and parameters in this function body.
+  llvm::SmallDenseMap<const ValueDecl *, SourceLocation, 8> RelocatedDecls;
+  llvm::SmallDenseMap<const ValueDecl *,
+                      llvm::SmallDenseMap<const NamedDecl *, SourceLocation, 4>,
+                      8>
+      RelocatedSubobjects;
+  llvm::SmallVector<RelocationUseSite, 8> RelocationUseSites;
+  llvm::SmallVector<RelocationEvent, 8> RelocationEvents;
+
 protected:
   FunctionScopeInfo(const FunctionScopeInfo&) = default;
 
@@ -397,8 +435,10 @@ public:
         HasPotentialAvailabilityViolations(false), ObjCShouldCallSuper(false),
         ObjCIsDesignatedInit(false), ObjCWarnForNoDesignatedInitChain(false),
         ObjCIsSecondaryInit(false), ObjCWarnForNoInitDelegation(false),
-        NeedsCoroutineSuspends(true), FoundImmediateEscalatingExpression(false),
-        ErrorTrap(Diag) {}
+        HadAnyError(false), NeedsCoroutineSuspends(true),
+        FoundImmediateEscalatingExpression(false), DiagEngine(&Diag),
+        ErrorTrap(Diag),
+        NumErrorsAtStart(Diag.getNumErrors()) {}
 
   virtual ~FunctionScopeInfo();
 
@@ -407,11 +447,15 @@ public:
   /// invalid, because the errors may be suppressed if they're caused by prior
   /// invalid declarations.
   ///
-  /// FIXME: Migrate the caller of this to use containsErrors() instead once
-  /// it's ready.
   bool hasUnrecoverableErrorOccurred() const {
     return ErrorTrap.hasUnrecoverableErrorOccurred();
   }
+
+  bool hasAnyErrorOccurred(const DiagnosticsEngine &Diag) const {
+    return HadAnyError || ErrorTrap.hasErrorOccurred() ||
+           Diag.getNumErrors() > NumErrorsAtStart;
+  }
+  void markErrorOccurred() { HadAnyError = true; }
 
   /// Record that a weak object was accessed.
   ///
@@ -430,6 +474,97 @@ public:
 
   const WeakObjectUseMap &getWeakObjectUses() const {
     return WeakObjectUses;
+  }
+
+  SourceLocation getRelocationLoc(const ValueDecl *D) const {
+    auto It = RelocatedDecls.find(D);
+    return It == RelocatedDecls.end() ? SourceLocation() : It->second;
+  }
+
+  RelocationState getRelocationState() const {
+    return {RelocatedDecls, RelocatedSubobjects};
+  }
+
+  void setRelocationState(const RelocationState &State) {
+    RelocatedDecls = State.RelocatedDecls;
+    RelocatedSubobjects = State.RelocatedSubobjects;
+  }
+
+  void intersectRelocationState(const RelocationState &State) {
+    for (auto It = RelocatedDecls.begin(); It != RelocatedDecls.end();) {
+      if (!State.RelocatedDecls.contains(It->first))
+        RelocatedDecls.erase(It++);
+      else
+        ++It;
+    }
+
+    for (auto It = RelocatedSubobjects.begin(); It != RelocatedSubobjects.end();) {
+      auto OtherIt = State.RelocatedSubobjects.find(It->first);
+      if (OtherIt == State.RelocatedSubobjects.end()) {
+        RelocatedSubobjects.erase(It++);
+        continue;
+      }
+
+      auto &Subobjects = It->second;
+      for (auto SubIt = Subobjects.begin(); SubIt != Subobjects.end();) {
+        if (!OtherIt->second.contains(SubIt->first))
+          Subobjects.erase(SubIt++);
+        else
+          ++SubIt;
+      }
+
+      if (Subobjects.empty()) {
+        RelocatedSubobjects.erase(It++);
+      } else {
+        ++It;
+      }
+    }
+  }
+
+  void markRelocated(const ValueDecl *D, SourceLocation Loc) {
+    RelocatedDecls.try_emplace(D, Loc);
+  }
+
+  void recordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                           SourceLocation Loc) {
+    RelocationUseSites.push_back({Site, D, nullptr, Loc});
+  }
+
+  void recordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                           const NamedDecl *Subobject, SourceLocation Loc) {
+    RelocationUseSites.push_back({Site, D, Subobject, Loc});
+  }
+
+  ArrayRef<RelocationUseSite> getRelocationUseSites() const {
+    return RelocationUseSites;
+  }
+
+  SourceLocation getRelocationLoc(const ValueDecl *D,
+                                  const NamedDecl *Subobject) const {
+    auto It = RelocatedSubobjects.find(D);
+    if (It == RelocatedSubobjects.end())
+      return SourceLocation();
+    auto SubIt = It->second.find(Subobject);
+    return SubIt == It->second.end() ? SourceLocation() : SubIt->second;
+  }
+
+  void markRelocated(const ValueDecl *D, const NamedDecl *Subobject,
+                     SourceLocation Loc) {
+    RelocatedSubobjects[D].try_emplace(Subobject, Loc);
+  }
+
+  void recordRelocationEvent(const Stmt *Site, const ValueDecl *D,
+                             SourceLocation Loc) {
+    RelocationEvents.push_back({Site, D, nullptr, Loc});
+  }
+
+  void recordRelocationEvent(const Stmt *Site, const ValueDecl *D,
+                             const NamedDecl *Subobject, SourceLocation Loc) {
+    RelocationEvents.push_back({Site, D, Subobject, Loc});
+  }
+
+  ArrayRef<RelocationEvent> getRelocationEvents() const {
+    return RelocationEvents;
   }
 
   void setHasBranchIntoScope() {

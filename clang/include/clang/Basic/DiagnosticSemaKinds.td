@@ -7991,6 +7991,11 @@ def err_defaulted_reloc_assign_param_type : Error<
   "an explicitly-defaulted decomposing relocation assignment operator must have parameter type %0">;
 def err_defaulted_nondecomposing_reloc_assign : Error<
   "only decomposing relocation assignment operators may be defaulted">;
+def err_use_after_reloc : Error<
+  "object %0 cannot be used after it has been relocated">;
+def err_use_after_reloc_subobject : Error<
+  "subobject %0 of decomposed object %1 cannot be used after it has been relocated">;
+def note_relocated_here : Note<"object relocated here">;
 def err_explicit_object_parameter_mutable: Error<
   "a lambda with an explicit object parameter cannot be mutable">;
 def err_invalid_explicit_object_type_in_lambda: Error<

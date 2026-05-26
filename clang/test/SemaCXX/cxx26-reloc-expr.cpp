@@ -109,3 +109,81 @@ void bad_cases() {
   (void)scalar(reloc global); // expected-error {{'reloc' operand must name a local variable or parameter}}
   (void)(reloc func); // expected-error {{'reloc' operand must be a glvalue or prvalue of object type}}
 }
+
+void use_after_reloc_local() {
+  S local;
+  (void)object(reloc local);
+  (void)local; // expected-error {{object 'local' cannot be used after it has been relocated}}
+               // expected-note@-2 {{object relocated here}}
+}
+
+void use_after_reloc_local_member() {
+  Derived local;
+  Derived other = reloc local;
+  (void)other;
+  (void)local.member; // expected-error {{object 'local' cannot be used after it has been relocated}}
+                      // expected-note@-3 {{object relocated here}}
+}
+
+void use_after_reloc_param(S param) {
+  (void)object(reloc param);
+  (void)param; // expected-error {{object 'param' cannot be used after it has been relocated}}
+               // expected-note@-2 {{object relocated here}}
+}
+
+void repeated_reloc(S param) {
+  (void)object(reloc param);
+  (void)object(reloc param); // expected-error {{object 'param' cannot be used after it has been relocated}}
+                             // expected-note@-2 {{object relocated here}}
+}
+
+void use_after_reloc_short_circuit_or(bool cond) {
+  S local;
+  if (!cond || ((void)object(reloc local), true)) {
+    if (!cond)
+      return;
+    (void)local; // expected-error {{object 'local' cannot be used after it has been relocated}}
+                 // expected-note@-4 {{object relocated here}}
+  }
+}
+
+void use_after_reloc_switch(int n) {
+  S local;
+  switch (n) {
+  case 0:
+    (void)object(reloc local);
+    break;
+  case 1:
+    break;
+  }
+  (void)local; // expected-error {{object 'local' cannot be used after it has been relocated}}
+               // expected-note@-6 {{object relocated here}}
+}
+
+void use_after_reloc_loop_break() {
+  S local;
+  while (true) {
+    (void)object(reloc local);
+    break;
+  }
+  (void)local; // expected-error {{object 'local' cannot be used after it has been relocated}}
+               // expected-note@-4 {{object relocated here}}
+}
+
+template <class T>
+using id_t = T;
+
+void unevaluated_after_reloc(S param) {
+  (void)object(reloc param);
+  using Param = id_t<decltype(param)>;
+  (void)sizeof(Param);
+}
+
+struct DecomposedUseAfterReloc {
+  Pair pair;
+
+  DecomposedUseAfterReloc(DecomposedUseAfterReloc src reloc) {
+    (void)object(reloc src.pair.first);
+    (void)object(reloc src.pair.second);
+  }
+};

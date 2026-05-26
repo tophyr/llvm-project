@@ -32,6 +32,70 @@ static CXXDecomposedObjectExpr *getDecomposedObjectBase(Expr *E) {
   return dyn_cast<CXXDecomposedObjectExpr>(E->IgnoreParenImpCasts());
 }
 
+static const ValueDecl *getDecomposedObjectRoot(const Expr *E) {
+  E = E->IgnoreParenImpCasts();
+  while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(E))
+    E = DOE->getOperand()->IgnoreParenImpCasts();
+  const auto *DRE = dyn_cast<DeclRefExpr>(E);
+  return DRE ? dyn_cast<ValueDecl>(DRE->getDecl()) : nullptr;
+}
+
+static bool RecordUseOfRelocatedSubobject(Sema &S, const Expr *BaseExpr,
+                                          const NamedDecl *Subobject,
+                                          const Stmt *Site,
+                                          SourceLocation UseLoc) {
+  const ValueDecl *Root = getDecomposedObjectRoot(BaseExpr);
+  if (!Root)
+    return false;
+
+  S.RecordRelocationUse(Site, Root, Subobject, UseLoc);
+  return false;
+}
+
+static bool RecordUseOfContainingRelocatedDirectBase(
+    Sema &S, const Expr *BaseExpr, const CXXRecordDecl *Owner,
+    const Stmt *Site, SourceLocation UseLoc) {
+  auto *DOE = getDecomposedObjectBase(const_cast<Expr *>(BaseExpr));
+  if (!DOE || !DOE->isWholeObject() || !Owner)
+    return false;
+
+  const ValueDecl *Root = getDecomposedObjectRoot(BaseExpr);
+  if (!Root)
+    return false;
+
+  const auto *RootRecord = BaseExpr->getType()->getAsCXXRecordDecl();
+  if (!RootRecord ||
+      RootRecord->getCanonicalDecl() == Owner->getCanonicalDecl())
+    return false;
+
+  CXXBasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/true,
+                     /*DetectVirtual=*/false);
+  if (!RootRecord->lookupInBases(
+          [Owner](const CXXBaseSpecifier *Specifier, CXXBasePath &) {
+            if (const auto *RD = Specifier->getType()->getAsCXXRecordDecl())
+              return RD->getCanonicalDecl() == Owner->getCanonicalDecl();
+            return false;
+          },
+          Paths))
+    return false;
+
+  for (const CXXBasePath &Path : Paths) {
+    if (Path.empty())
+      continue;
+
+    const auto *DirectBase =
+        Path.front().Base->getType()->getAsCXXRecordDecl();
+    if (!DirectBase ||
+        DirectBase->getCanonicalDecl() == Owner->getCanonicalDecl())
+      continue;
+
+    S.RecordRelocationUse(Site, Root, DirectBase, UseLoc);
+    return true;
+  }
+
+  return false;
+}
+
 static ExprResult BuildDecomposedBaseSubobjectExpr(
     Sema &S, Expr *BaseExpr, const DeclarationNameInfo &NameInfo) {
   auto *DOE = getDecomposedObjectBase(BaseExpr);
@@ -94,10 +158,16 @@ static ExprResult BuildDecomposedBaseSubobjectExpr(
   QualType ResultType =
       S.Context.getQualifiedType(TargetType.getUnqualifiedType(),
                                  BaseExpr->getType().getQualifiers());
-  return new (S.Context) CXXDecomposedObjectExpr(
+  auto *Result = new (S.Context) CXXDecomposedObjectExpr(
       ResultType, BaseExpr, NameInfo.getLoc(),
       CXXDecomposedObjectExpr::AK_BaseSubobject,
       ResultType->getAsCXXRecordDecl(), IsDirectBase, IsVirtualBase);
+  RecordUseOfRelocatedSubobject(S, BaseExpr, ResultType->getAsCXXRecordDecl(),
+                                Result, NameInfo.getLoc());
+  RecordUseOfContainingRelocatedDirectBase(
+      S, BaseExpr, ResultType->getAsCXXRecordDecl(), Result,
+      NameInfo.getLoc());
+  return Result;
 }
 
 static ExprResult BuildDecomposedOwningBaseExpr(Sema &S, Expr *BaseExpr,
@@ -1164,8 +1234,17 @@ Sema::BuildMemberReferenceExpr(Expr *BaseExpr, QualType BaseExprType,
     }
     if (ConvertBaseExprToGLValue())
       return ExprError();
-    return BuildFieldReferenceExpr(BaseExpr, IsArrow, OpLoc, SS, FD, FoundDecl,
-                                   MemberNameInfo);
+    ExprResult Result = BuildFieldReferenceExpr(BaseExpr, IsArrow, OpLoc, SS,
+                                                FD, FoundDecl, MemberNameInfo);
+    if (Result.isUsable()) {
+      if (const auto *DOE = getDecomposedObjectBase(BaseExpr))
+        RecordUseOfRelocatedSubobject(*this, DOE, FD, Result.get(),
+                                      MemberNameInfo.getLoc());
+      RecordUseOfContainingRelocatedDirectBase(
+          *this, BaseExpr, dyn_cast<CXXRecordDecl>(FD->getParent()),
+          Result.get(), MemberNameInfo.getLoc());
+    }
+    return Result;
   }
 
   if (MSPropertyDecl *PD = dyn_cast<MSPropertyDecl>(MemberDecl)) {

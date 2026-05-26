@@ -204,6 +204,7 @@ class DelayedDiagnostic;
 class DelayedDiagnosticPool;
 class FunctionScopeInfo;
 class LambdaScopeInfo;
+struct RelocationState;
 class SemaPPCallbacks;
 class TemplateDeductionInfo;
 } // namespace sema
@@ -3139,6 +3140,11 @@ public:
   ExprResult ActOnCoawaitExpr(Scope *S, SourceLocation KwLoc, Expr *E);
   ExprResult ActOnCoyieldExpr(Scope *S, SourceLocation KwLoc, Expr *E);
   ExprResult ActOnRelocExpr(Scope *S, SourceLocation KwLoc, Expr *E);
+  bool DiagnoseUseOfRelocatedValue(const ValueDecl *D, SourceLocation Loc);
+  void RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                           SourceLocation Loc);
+  void RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                           const NamedDecl *Subobject, SourceLocation Loc);
   StmtResult ActOnCoreturnStmt(Scope *S, SourceLocation KwLoc, Expr *E);
 
   ExprResult BuildOperatorCoawaitLookupExpr(Scope *S, SourceLocation Loc);
@@ -7272,6 +7278,10 @@ public:
   // Binary/Unary Operators.  'Tok' is the token for the operator.
   ExprResult CreateBuiltinUnaryOp(SourceLocation OpLoc, UnaryOperatorKind Opc,
                                   Expr *InputExpr, bool IsAfterAmp = false);
+  sema::RelocationState getCurrentFunctionRelocationState() const;
+  void setCurrentFunctionRelocationState(const sema::RelocationState &State);
+  void intersectCurrentFunctionRelocationState(
+      const sema::RelocationState &State);
   ExprResult BuildUnaryOp(Scope *S, SourceLocation OpLoc, UnaryOperatorKind Opc,
                           Expr *Input, bool IsAfterAmp = false);
 

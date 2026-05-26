@@ -47,6 +47,27 @@ static bool lookupMember(Sema &S, const char *Name, CXXRecordDecl *RD,
   return Res;
 }
 
+static const DeclRefExpr *getDecomposedObjectRootDeclRef(const Expr *E) {
+  E = E->IgnoreParenImpCasts();
+  while (const auto *ME = dyn_cast<MemberExpr>(E))
+    E = ME->getBase()->IgnoreParenImpCasts();
+  while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(E)) {
+    E = DOE->getOperand()->IgnoreParenImpCasts();
+    while (const auto *ME = dyn_cast<MemberExpr>(E))
+      E = ME->getBase()->IgnoreParenImpCasts();
+  }
+  return dyn_cast<DeclRefExpr>(E);
+}
+
+static const NamedDecl *getRelocSubobjectKey(const Expr *E) {
+  E = E->IgnoreParenImpCasts();
+  if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(E))
+    return DOE->isBaseSubobject() ? DOE->getBaseTypeDecl() : nullptr;
+  if (const auto *ME = dyn_cast<MemberExpr>(E))
+    return dyn_cast<ValueDecl>(ME->getMemberDecl());
+  return nullptr;
+}
+
 /// Look up the std::coroutine_traits<...>::promise_type for the given
 /// function type.
 static QualType lookupPromiseType(Sema &S, const FunctionDecl *FD,
@@ -1139,14 +1160,42 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
   } else if ((!VD || !VD->hasLocalStorage()) &&
              !(BD && BD->isRelocDecompositionBinding())) {
     if (const auto *PVD = DRE ? dyn_cast<ParmVarDecl>(DRE->getDecl()) : nullptr) {
-      if (PVD->isRelocParameter())
-        return new (Context) CXXRelocExpr(Ty, E, Loc);
+      if (PVD->isRelocParameter()) {
+        auto *RelocExpr = new (Context) CXXRelocExpr(Ty, E, Loc);
+        if (FunctionScopeInfo *FSI = getCurFunction()) {
+          FSI->markRelocated(PVD, Loc);
+          FSI->recordRelocationEvent(RelocExpr, PVD, Loc);
+          if (const auto *RootDRE = getDecomposedObjectRootDeclRef(Operand))
+            if (const auto *RootVD = dyn_cast<ValueDecl>(RootDRE->getDecl()))
+              if (const auto *Subobject = getRelocSubobjectKey(Operand))
+                FSI->recordRelocationEvent(RelocExpr, RootVD, Subobject, Loc),
+                FSI->markRelocated(RootVD, Subobject, Loc);
+        }
+        return RelocExpr;
+      }
     }
     Diag(Loc, diag::err_reloc_operand_not_local) << E->getSourceRange();
     return ExprError();
   }
 
-  return new (Context) CXXRelocExpr(Ty, E, Loc);
+  auto *RelocExpr = new (Context) CXXRelocExpr(Ty, E, Loc);
+  if (FunctionScopeInfo *FSI = getCurFunction()) {
+    if (BD && BD->isRelocDecompositionBinding()) {
+      if (!IsRelocDecompositionSubobject(Operand)) {
+        FSI->markRelocated(BD, Loc);
+        FSI->recordRelocationEvent(RelocExpr, BD, Loc);
+      }
+    } else if (!IsRelocDecompositionSubobject(Operand)) {
+      FSI->markRelocated(VD, Loc);
+      FSI->recordRelocationEvent(RelocExpr, VD, Loc);
+    }
+    if (const auto *RootDRE = getDecomposedObjectRootDeclRef(Operand))
+      if (const auto *RootVD = dyn_cast<ValueDecl>(RootDRE->getDecl()))
+        if (const auto *Subobject = getRelocSubobjectKey(Operand))
+          FSI->recordRelocationEvent(RelocExpr, RootVD, Subobject, Loc),
+          FSI->markRelocated(RootVD, Subobject, Loc);
+  }
+  return RelocExpr;
 }
 
 StmtResult Sema::ActOnCoreturnStmt(Scope *S, SourceLocation Loc, Expr *E) {

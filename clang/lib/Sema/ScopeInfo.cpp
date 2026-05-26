@@ -35,6 +35,7 @@ void FunctionScopeInfo::Clear() {
   ObjCWarnForNoDesignatedInitChain = false;
   ObjCIsSecondaryInit = false;
   ObjCWarnForNoInitDelegation = false;
+  HadAnyError = false;
   FirstReturnLoc = SourceLocation();
   FirstCXXOrObjCTryLoc = SourceLocation();
   FirstSEHTryLoc = SourceLocation();
@@ -52,8 +53,10 @@ void FunctionScopeInfo::Clear() {
   SwitchStack.clear();
   Returns.clear();
   ErrorTrap.reset();
+  NumErrorsAtStart = DiagEngine ? DiagEngine->getNumErrors() : 0;
   PossiblyUnreachableDiags.clear();
   WeakObjectUses.clear();
+  RelocatedDecls.clear();
   ModifiedNonNullParams.clear();
   Blocks.clear();
   ByrefBlockVars.clear();

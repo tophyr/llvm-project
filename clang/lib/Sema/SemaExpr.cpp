@@ -2460,6 +2460,30 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
   return E;
 }
 
+bool Sema::DiagnoseUseOfRelocatedValue(const ValueDecl *D, SourceLocation Loc) {
+  RecordRelocationUse(nullptr, D, Loc);
+  return false;
+}
+
+void Sema::RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                               SourceLocation Loc) {
+  auto *FSI = getCurFunction();
+  if (!FSI || !currentEvaluationContext().isPotentiallyEvaluated())
+    return;
+
+  FSI->recordRelocationUse(Site, D, Loc);
+}
+
+void Sema::RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                               const NamedDecl *Subobject,
+                               SourceLocation Loc) {
+  auto *FSI = getCurFunction();
+  if (!FSI || !currentEvaluationContext().isPotentiallyEvaluated())
+    return;
+
+  FSI->recordRelocationUse(Site, D, Subobject, Loc);
+}
+
 void
 Sema::DecomposeUnqualifiedId(const UnqualifiedId &Id,
                              TemplateArgumentListInfo &Buffer,
@@ -20308,6 +20332,9 @@ MarkExprReferenced(Sema &SemaRef, SourceLocation Loc, Decl *D, Expr *E,
 }
 
 void Sema::MarkDeclRefReferenced(DeclRefExpr *E, const Expr *Base) {
+  if (auto *VD = dyn_cast<ValueDecl>(E->getDecl()))
+    RecordRelocationUse(E, VD, E->getLocation());
+
   // [basic.def.odr] (CWG 1614)
   // A function is named by an expression or conversion [...]
   // unless it is a pure virtual function and either the expression is not an

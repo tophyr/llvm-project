@@ -16786,7 +16786,9 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body,
           getDiagnostics().getSuppressAllDiagnostics()) {
         DiscardCleanupsInEvaluationContext();
       }
-      if (!hasUncompilableErrorOccurred() && !isa<FunctionTemplateDecl>(dcl)) {
+      if ((!hasUncompilableErrorOccurred() ||
+           !FSI->getRelocationEvents().empty()) &&
+          !isa<FunctionTemplateDecl>(dcl)) {
         // Since the body is valid, issue any analysis-based warnings that are
         // enabled.
         ActivePolicy = &WP;

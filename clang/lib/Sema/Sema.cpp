@@ -1756,9 +1756,16 @@ void Sema::EmitDiagnostic(unsigned DiagID, const DiagnosticBuilder &DB) {
   // TODO: Stop doing that.  See: https://reviews.llvm.org/D45093#1090292
   Context.setPrintingPolicy(getPrintingPolicy());
 
+  DiagnosticsEngine::Level Level =
+      Diags.getDiagnosticLevel(DiagInfo.getID(), DiagInfo.getLocation());
+
   // Emit the diagnostic.
   if (!Diags.EmitDiagnostic(DB))
     return;
+
+  if (Level >= DiagnosticsEngine::Error)
+    if (auto *FSI = getCurFunction())
+      FSI->markErrorOccurred();
 
   // If this is not a note, and we're in a template instantiation
   // that is different from the last template instantiation where
@@ -2487,6 +2494,24 @@ void Sema::PopCompoundScope() {
 
 bool Sema::hasAnyUnrecoverableErrorsInThisFunction() const {
   return getCurFunction()->hasUnrecoverableErrorOccurred();
+}
+
+sema::RelocationState Sema::getCurrentFunctionRelocationState() const {
+  if (const auto *FSI = getCurFunction())
+    return FSI->getRelocationState();
+  return sema::RelocationState();
+}
+
+void Sema::setCurrentFunctionRelocationState(
+    const sema::RelocationState &State) {
+  if (auto *FSI = getCurFunction())
+    FSI->setRelocationState(State);
+}
+
+void Sema::intersectCurrentFunctionRelocationState(
+    const sema::RelocationState &State) {
+  if (auto *FSI = getCurFunction())
+    FSI->intersectRelocationState(State);
 }
 
 void Sema::setFunctionHasBranchIntoScope() {

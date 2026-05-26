@@ -295,6 +295,159 @@ void member_pointer_uses() {
   (void)(local.*dynamic_ptr); // expected-error {{pointer-to-member access through decomposed object 'local' requires a constant-evaluated member pointer}}
 }
 
+void relocated_subobject_uses() {
+  W local reloc;
+  (void)reloc local.w; // expected-note {{object relocated here}}
+  (void)local.w; // expected-error {{subobject 'w' of decomposed object 'local' cannot be used after it has been relocated}}
+
+  (void)reloc local.B; // expected-note {{object relocated here}}
+  (void)local.B; // expected-error {{subobject 'B' of decomposed object 'local' cannot be used after it has been relocated}}
+  (void)local.b; // expected-error {{subobject 'B' of decomposed object 'local' cannot be used after it has been relocated}} expected-note@-2 {{object relocated here}}
+  (void)local.a; // expected-error {{subobject 'B' of decomposed object 'local' cannot be used after it has been relocated}} expected-note@-3 {{object relocated here}}
+  (void)local.A; // expected-error {{subobject 'B' of decomposed object 'local' cannot be used after it has been relocated}} expected-note@-4 {{object relocated here}}
+}
+
+void if_stmt_flow(bool cond) {
+  S whole = {};
+  if (cond)
+    (void)reloc whole;
+  else
+    (void)whole.value;
+  (void)whole.value; // expected-error {{object 'whole' cannot be used after it has been relocated}}
+  // expected-note@-4 {{object relocated here}}
+
+  S whole_both = {};
+  if (cond)
+    (void)reloc whole_both;
+  else
+    (void)reloc whole_both;
+  (void)whole_both.value; // expected-error {{object 'whole_both' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+
+  W local reloc;
+  if (cond)
+    (void)reloc local.B;
+  else
+    (void)local.a;
+  (void)local.a; // expected-error {{subobject 'B' of decomposed object 'local' cannot be used after it has been relocated}}
+  // expected-note@-4 {{object relocated here}}
+
+  W local_both reloc;
+  if (cond)
+    (void)reloc local_both.B;
+  else
+    (void)reloc local_both.B;
+  (void)local_both.a; // expected-error {{subobject 'B' of decomposed object 'local_both' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+}
+
+int conditional_flow(bool cond) {
+  S whole = {};
+  int value = cond ? ((void)reloc whole, 0) : whole.value;
+  (void)whole.value; // expected-error {{object 'whole' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+
+  S both = {};
+  value += cond ? ((void)reloc both, 0) : ((void)reloc both, 1);
+  (void)both.value; // expected-error {{object 'both' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+
+  W local reloc;
+  value += cond ? ((void)reloc local.B, 0) : local.a;
+  (void)local.a; // expected-error {{subobject 'B' of decomposed object 'local' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+
+  W both_local reloc;
+  value += cond ? ((void)reloc both_local.B, 0) : ((void)reloc both_local.B, 1);
+  (void)both_local.a; // expected-error {{subobject 'B' of decomposed object 'both_local' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+  return value;
+}
+
+void short_circuit_flow(bool cond) {
+  S whole = {};
+  if (cond && ((void)reloc whole, true))
+    (void)whole.value; // expected-error {{object 'whole' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+
+  S other = {};
+  if (cond || ((void)reloc other, false))
+    (void)other.value;
+
+  S filtered = {};
+  if (cond || ((void)reloc filtered, true))
+    if (!cond)
+      (void)filtered.value; // expected-error {{object 'filtered' cannot be used after it has been relocated}}
+  // expected-note@-3 {{object relocated here}}
+
+  W local reloc;
+  if (cond && ((void)reloc local.B, true))
+    (void)local.a; // expected-error {{subobject 'B' of decomposed object 'local' cannot be used after it has been relocated}}
+  // expected-note@-2 {{object relocated here}}
+}
+
+int switch_flow(int n) {
+  S whole = {};
+  switch (n) {
+  case 0:
+    (void)reloc whole; // expected-note {{object relocated here}}
+    break;
+  default:
+    (void)whole.value;
+    break;
+  }
+  (void)whole.value; // expected-error {{object 'whole' cannot be used after it has been relocated}}
+
+  S both = {};
+  switch (n) {
+  case 0:
+    (void)reloc both;
+    break;
+  default:
+    (void)reloc both;
+    break;
+  }
+  (void)both.value; // expected-error {{object 'both' cannot be used after it has been relocated}}
+  // expected-note@-4 {{object relocated here}}
+
+  return whole.value; // expected-error {{object 'whole' cannot be used after it has been relocated}}
+  // expected-note@-21 {{object relocated here}}
+}
+
+void loop_flow(bool cond) {
+  S maybe = {};
+  while (cond) {
+    (void)reloc maybe;
+    break;
+  }
+  (void)maybe.value; // expected-error {{object 'maybe' cannot be used after it has been relocated}}
+  // expected-note@-4 {{object relocated here}}
+
+  S sure = {};
+  do {
+    (void)reloc sure;
+  } while (false);
+  (void)sure.value; // expected-error {{object 'sure' cannot be used after it has been relocated}}
+  // expected-note@-3 {{object relocated here}}
+
+  S for_local = {};
+  for (int i = 0; i != 2; ++i) {
+    if (!cond)
+      continue;
+    (void)reloc for_local; // expected-note {{object relocated here}} expected-note {{object relocated here}}
+  // expected-error@-1 {{object 'for_local' cannot be used after it has been relocated}}
+  }
+  if (cond)
+    (void)for_local.value; // expected-error {{object 'for_local' cannot be used after it has been relocated}}
+
+  S repeated = {};
+  for (int i = 0; i != 2; ++i) {
+    if (!cond)
+      continue;
+    (void)reloc repeated; // expected-note {{object relocated here}}
+  // expected-error@-1 {{object 'repeated' cannot be used after it has been relocated}}
+  }
+}
 S global reloc; // expected-error {{'reloc' may only appear on a function parameter or local variable definition}}
 static S global_static reloc; // expected-error {{'reloc' may only appear on a function parameter or local variable definition}}
 extern S global_extern reloc; // expected-error {{'reloc' may only appear on a function parameter or local variable definition}}

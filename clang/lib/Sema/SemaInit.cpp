@@ -273,6 +273,15 @@ static ExprResult maybeBuildRelocParameterInitialization(
                                       /*Reclaim=*/false,
                                       /*OperatorDelete=*/nullptr);
 
+  if (auto *FSI = S.getCurFunction()) {
+    const Expr *Operand = Reloc->getOperand()->IgnoreParenImpCasts();
+    while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(Operand))
+      Operand = DOE->getOperand()->IgnoreParenImpCasts();
+    if (const auto *DRE = dyn_cast<DeclRefExpr>(Operand))
+      if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl()))
+        FSI->recordRelocationEvent(Relocate, VD, Reloc->getRelocLoc());
+  }
+
   return Relocate;
 }
 
