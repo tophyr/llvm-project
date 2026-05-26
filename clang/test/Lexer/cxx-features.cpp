@@ -45,6 +45,10 @@
 #error "wrong value for __cpp_pack_indexing"
 #endif
 
+#if check(trivial_relocatability, 202502, 202502, 202502, 202502, 202502, 202502, 202502)
+#error "wrong value for __cpp_trivial_relocatability"
+#endif
+
 #if check(placeholder_variables, 202306, 202306, 202306, 202306, 202306, 202306, 202306)
 #error "wrong value for __cpp_placeholder_variables"
 #endif

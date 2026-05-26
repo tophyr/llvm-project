@@ -7406,9 +7406,9 @@ void Sema::CheckCompletedCXXClass(Scope *S, CXXRecordDecl *Record) {
   if (CXXDestructorDecl *Dtor = Record->getDestructor())
     CompleteMemberFunction(Dtor);
 
-  if (needsImplicitVirtualSlicingFunction(Record))
+  if (getLangOpts().Relocation && needsImplicitVirtualSlicingFunction(Record))
     DeclareImplicitVirtualSlicingFunction(Record);
-  if (Record->hasVirtualSlicingFunction())
+  if (getLangOpts().Relocation && Record->hasVirtualSlicingFunction())
     diagnoseVirtualSlicingDefinition(*this, Record);
 
   bool HasMethodWithOverrideControl = false,
@@ -11181,6 +11181,8 @@ static bool hasBaseVirtualSlicingFunction(const CXXRecordDecl *RD) {
 }
 
 static bool needsImplicitVirtualSlicingFunction(const CXXRecordDecl *RD) {
+  if (!RD->getASTContext().getLangOpts().Relocation)
+    return false;
   if (RD->hasVirtualSlicingFunction())
     return false;
   const CXXDestructorDecl *Dtor = RD->getDestructor();

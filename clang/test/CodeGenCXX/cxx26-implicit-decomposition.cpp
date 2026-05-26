@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++26 -emit-llvm -O0 -disable-llvm-passes %s -o - | FileCheck %s
+// RUN: %clang_cc1 -std=c++26 -frelocation -emit-llvm -O0 -disable-llvm-passes %s -o - | FileCheck %s
 
 struct Tracker {
   int *p;

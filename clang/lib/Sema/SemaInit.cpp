@@ -223,7 +223,7 @@ static ExprResult maybeBuildImplicitTemporaryDecomposition(Sema &S, Expr *Init) 
 
 static ExprResult maybeBuildImplicitDecompositionInitialization(
     Sema &S, const InitializedEntity &Entity, Expr *Init) {
-  if (!Init || !S.getLangOpts().CPlusPlus26 || Entity.getType()->isReferenceType())
+  if (!Init || !S.getLangOpts().Relocation || Entity.getType()->isReferenceType())
     return Init;
 
   const auto *IDE =
@@ -284,7 +284,6 @@ static ExprResult maybeBuildRelocParameterInitialization(
 
   return Relocate;
 }
-
 
 } // namespace
 
@@ -6869,7 +6868,7 @@ void InitializationSequence::InitializeFrom(Sema &S,
           S.ObjC().CheckConversionToObjCLiteral(DestType, Initializer))
         Args[0] = Initializer;
     }
-    if (S.getLangOpts().CPlusPlus26)
+    if (S.getLangOpts().Relocation)
       if (ExprResult ImplicitDecomp =
               maybeBuildImplicitTemporaryDecomposition(S, Initializer);
           !ImplicitDecomp.isInvalid() && ImplicitDecomp.get() != Initializer) {

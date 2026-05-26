@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++26 %s -triple x86_64-unknown-linux-gnu -emit-llvm-only -fdump-vtable-layouts > %t
+// RUN: %clang_cc1 -std=c++26 -frelocation %s -triple x86_64-unknown-linux-gnu -emit-llvm-only -fdump-vtable-layouts > %t
 // RUN: FileCheck %s < %t
 
 namespace IntroducesSlice {

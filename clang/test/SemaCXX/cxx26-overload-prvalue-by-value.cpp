@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -std=c++23 -verify=pre26 %s
-// RUN: %clang_cc1 -std=c++26 -verify %s
+// RUN: %clang_cc1 -std=c++26 -frelocation -verify %s
 // expected-no-diagnostics
 
 struct ByConstRef {};

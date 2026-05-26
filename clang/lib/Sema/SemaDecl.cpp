@@ -10553,7 +10553,7 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   // Finally, we know we have the right number of parameters, install them.
   NewFD->setParams(Params);
 
-  if (getLangOpts().CPlusPlus26 && isPaperRelocConstructAtOverload(NewFD))
+  if (getLangOpts().Relocation && isPaperRelocConstructAtOverload(NewFD))
     NewFD->getParamDecl(1)->setIsRelocParameter(true);
 
   if (getLangOpts().CPlusPlus) {

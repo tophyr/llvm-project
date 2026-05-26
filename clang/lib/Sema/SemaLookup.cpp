@@ -1089,7 +1089,7 @@ static void DeclareImplicitMemberFunctionsWithName(Sema &S,
         if (S.getLangOpts().CPlusPlus11 &&
             Record->needsImplicitMoveConstructor())
           S.DeclareImplicitMoveConstructor(Class);
-        if (S.getLangOpts().CPlusPlus26 &&
+        if (S.getLangOpts().Relocation &&
             Record->needsImplicitRelocationConstructor())
           S.DeclareImplicitRelocationConstructor(Class);
       }
@@ -1114,7 +1114,7 @@ static void DeclareImplicitMemberFunctionsWithName(Sema &S,
         if (S.getLangOpts().CPlusPlus11 &&
             Record->needsImplicitMoveAssignment())
           S.DeclareImplicitMoveAssignment(Class);
-        if (S.getLangOpts().CPlusPlus26 &&
+        if (S.getLangOpts().Relocation &&
             Record->needsImplicitRelocationAssignment()) {
           if (Record->needsImplicitCopyAssignment())
             S.DeclareImplicitCopyAssignment(Class);
@@ -3476,7 +3476,7 @@ Sema::LookupSpecialMember(CXXRecordDecl *RD, CXXSpecialMemberKind SM,
           DeclareImplicitMoveConstructor(RD);
         });
       }
-      if (getLangOpts().CPlusPlus26 && RD->needsImplicitRelocationConstructor()) {
+      if (getLangOpts().Relocation && RD->needsImplicitRelocationConstructor()) {
         runWithSufficientStackSpace(RD->getLocation(), [&] {
           DeclareImplicitRelocationConstructor(RD);
         });
@@ -3493,7 +3493,7 @@ Sema::LookupSpecialMember(CXXRecordDecl *RD, CXXSpecialMemberKind SM,
           DeclareImplicitMoveAssignment(RD);
         });
       }
-      if (getLangOpts().CPlusPlus26 && RD->needsImplicitRelocationAssignment()) {
+      if (getLangOpts().Relocation && RD->needsImplicitRelocationAssignment()) {
         runWithSufficientStackSpace(RD->getLocation(), [&] {
           if (RD->needsImplicitCopyAssignment())
             DeclareImplicitCopyAssignment(RD);
@@ -3662,7 +3662,7 @@ DeclContext::lookup_result Sema::LookupConstructors(CXXRecordDecl *Class) {
         DeclareImplicitCopyConstructor(Class);
       if (getLangOpts().CPlusPlus11 && Class->needsImplicitMoveConstructor())
         DeclareImplicitMoveConstructor(Class);
-      if (getLangOpts().CPlusPlus26 &&
+      if (getLangOpts().Relocation &&
           Class->needsImplicitRelocationConstructor())
         DeclareImplicitRelocationConstructor(Class);
     });

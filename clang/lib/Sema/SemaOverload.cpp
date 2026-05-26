@@ -4553,7 +4553,7 @@ isBetterReferenceBindingKind(const StandardConversionSequence &SCS1,
 static bool isBetterPrvalueValueBinding(const LangOptions &LangOpts,
                                         const StandardConversionSequence &SCS1,
                                         const StandardConversionSequence &SCS2) {
-  if (!LangOpts.CPlusPlus26)
+  if (!LangOpts.Relocation)
     return false;
 
   return !SCS1.ReferenceBinding && SCS2.ReferenceBinding &&

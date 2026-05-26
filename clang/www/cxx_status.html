@@ -283,7 +283,13 @@ C++23, informally referred to as C++26.</p>
   <td class="partial" align="center">
     <details>
       <summary>Clang 21 (Partial)</summary>
-      The feature test macro (<code>__cpp_trivial_relocatability</code>) has not yet been set.
+      This fork implements the earlier <a href="https://htmlpreview.github.io/?https://github.com/SebastienBini/cpp-relocation-proposal/blob/main/relocation.html">P2785R4</a>
+      design (the <code>reloc</code> expression, <code>T reloc</code> parameter
+      syntax, relocation special members, and CFG-based use-after-reloc
+      diagnostics), gated on the <code>-frelocation</code> driver flag.
+      The <code>__cpp_trivial_relocatability</code> feature-test macro is
+      defined to the standardized value <code>202502L</code> for tooling
+      compatibility, but the language semantics differ from P2786R13.
     </details>
   </td>
  </tr>

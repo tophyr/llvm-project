@@ -7068,6 +7068,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       types::isCXX(InputType))
     CmdArgs.push_back("-fcoro-aligned-allocation");
 
+  // P2785R4: Forward -frelocation to cc1.
+  if (Args.hasFlag(options::OPT_frelocation,
+                   options::OPT_fno_relocation, false) &&
+      types::isCXX(InputType))
+    CmdArgs.push_back("-frelocation");
+
   Args.AddLastArg(CmdArgs, options::OPT_fdouble_square_bracket_attributes,
                   options::OPT_fno_double_square_bracket_attributes);
 

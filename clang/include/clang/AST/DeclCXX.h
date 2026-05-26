@@ -887,7 +887,7 @@ public:
   /// Determine whether this class should get an implicit relocation
   /// constructor.
   bool needsImplicitRelocationConstructor() const {
-    if (!getLangOpts().CPlusPlus26)
+    if (!getLangOpts().Relocation)
       return false;
     if (hasDeclaredRelocationConstructor())
         return false;
@@ -1038,7 +1038,7 @@ public:
   /// Determine whether this class should get an implicit relocation
   /// assignment operator.
   bool needsImplicitRelocationAssignment() const {
-    if (!getLangOpts().CPlusPlus26)
+    if (!getLangOpts().Relocation)
       return false;
     if (hasDeclaredRelocationAssignment())
         return false;

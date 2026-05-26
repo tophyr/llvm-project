@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++26 -ast-dump %s | FileCheck %s
+// RUN: %clang_cc1 -std=c++26 -frelocation -ast-dump %s | FileCheck %s
 
 struct TrivialCopyFallbackMember {
   int value;

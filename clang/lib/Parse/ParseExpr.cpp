@@ -864,7 +864,7 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
   ParseIdentifier: {    // primary-expression: identifier
                         // unqualified-id: identifier
                         // constant: enumeration-constant
-    if (getLangOpts().CPlusPlus && Tok.getIdentifierInfo()) {
+    if (getLangOpts().Relocation && Tok.getIdentifierInfo()) {
       if (!Ident_reloc)
         Ident_reloc = &PP.getIdentifierTable().get("reloc");
       if (Tok.getIdentifierInfo() == Ident_reloc) {

@@ -774,7 +774,12 @@ static void InitializeCPlusPlusFeatureTestMacros(const LangOptions &LangOpts,
   Builder.defineMacro("__cpp_pack_indexing", "202311L");
   Builder.defineMacro("__cpp_deleted_function", "202403L");
   Builder.defineMacro("__cpp_variadic_friend", "202403L");
-  // Builder.defineMacro("__cpp_trivial_relocatability", "202502L");
+  // NOTE: 202502L is the standardized value for P2786R13 "Trivial
+  // Relocatability for C++26", but this tree currently implements the
+  // earlier P2785R4 design (gated behind -frelocation). The two papers
+  // share a concept but differ in syntax and semantics; code that probes
+  // this macro to detect P2786 semantics will be misled.
+  Builder.defineMacro("__cpp_trivial_relocatability", "202502L");
 
   if (LangOpts.Char8)
     Builder.defineMacro("__cpp_char8_t", "202207L");

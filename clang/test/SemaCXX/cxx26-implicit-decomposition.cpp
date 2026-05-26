@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++26 -fsyntax-only -verify %s
+// RUN: %clang_cc1 -std=c++26 -frelocation -fsyntax-only -verify %s
 
 struct R {
   int value;

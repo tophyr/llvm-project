@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++26 -fsyntax-only %s
+// RUN: %clang_cc1 -std=c++26 -frelocation -fsyntax-only %s
 
 struct CopyOnlyNoexcept {
   CopyOnlyNoexcept() = default;

@@ -6614,7 +6614,7 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
       // the l_paren token.
     }
 
-    if (Tok.is(tok::identifier) &&
+    if (getLangOpts().Relocation && Tok.is(tok::identifier) &&
         (D.getContext() == DeclaratorContext::Prototype ||
          D.getContext() == DeclaratorContext::LambdaExprParameter) &&
         Tok.getIdentifierInfo() &&
@@ -6823,8 +6823,8 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
   if (D.hasName() && !D.getNumTypeObjects())
     MaybeParseCXX11Attributes(D);
 
-  if (Tok.is(tok::identifier) && Tok.getIdentifierInfo() &&
-      Tok.getIdentifierInfo()->isStr("reloc")) {
+  if (getLangOpts().Relocation && Tok.is(tok::identifier) &&
+      Tok.getIdentifierInfo() && Tok.getIdentifierInfo()->isStr("reloc")) {
     if (D.getContext() == DeclaratorContext::Prototype ||
         D.getContext() == DeclaratorContext::LambdaExprParameter) {
       D.setRelocParameter(true);
@@ -7034,7 +7034,8 @@ void Parser::ParseDecompositionDeclarator(Declarator &D) {
 
     T.consumeClose();
 
-    if (Tok.is(tok::identifier) && Tok.getIdentifierInfo() &&
+    if (getLangOpts().Relocation && Tok.is(tok::identifier) &&
+        Tok.getIdentifierInfo() &&
         Tok.getIdentifierInfo()->isStr("reloc")) {
       D.setRelocObject(true);
       D.SetRangeEnd(Tok.getLocation());
