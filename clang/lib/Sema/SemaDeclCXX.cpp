@@ -9802,6 +9802,54 @@ bool SpecialMemberDeletionInfo::shouldDeleteForClassSubobject(
     CXXRecordDecl *Class, Subobject Subobj, unsigned Quals) {
   FieldDecl *Field = Subobj.dyn_cast<FieldDecl*>();
   bool IsMutable = Field && Field->isMutable();
+  auto *Base = dyn_cast<CXXBaseSpecifier *>(Subobj);
+
+  auto TryUsable = [&](Sema::SpecialMemberOverloadResult SMOR) {
+    return SMOR.getKind() == Sema::SpecialMemberOverloadResult::Success &&
+           isAccessible(Subobj, SMOR.getMethod());
+  };
+
+  auto PickFallback = [&](Sema::SpecialMemberOverloadResult First,
+                          Sema::SpecialMemberOverloadResult Second) {
+    if (First.getKind() != Sema::SpecialMemberOverloadResult::NoMemberOrDeleted
+        || First.getMethod())
+      return First;
+    return Second;
+  };
+
+  if ((isa<CXXConstructorDecl>(MD) &&
+       cast<CXXConstructorDecl>(MD)->isRelocationConstructor()) ||
+      MD->isRelocationAssignmentOperator()) {
+    bool IsAssignment = MD->isRelocationAssignmentOperator();
+    if (!Base || !Base->isVirtual()) {
+      Sema::SpecialMemberOverloadResult Reloc =
+          lookupDeclaredRelocationSpecialMember(Class, IsAssignment);
+      if (Reloc.getMethod() && Reloc.getMethod()->isDeleted() &&
+          shouldDeleteForSubobjectCall(Subobj, Reloc, false))
+        return true;
+      if (TryUsable(Reloc))
+        goto CheckDestructor;
+    }
+
+    Sema::SpecialMemberOverloadResult Move = lookupCallFromSpecialMember(
+        S, Class,
+        IsAssignment ? CXXSpecialMemberKind::MoveAssignment
+                     : CXXSpecialMemberKind::MoveConstructor,
+        Quals, ConstArg && !IsMutable);
+    if (TryUsable(Move))
+      goto CheckDestructor;
+
+    Sema::SpecialMemberOverloadResult Copy = lookupCallFromSpecialMember(
+        S, Class,
+        IsAssignment ? CXXSpecialMemberKind::CopyAssignment
+                     : CXXSpecialMemberKind::CopyConstructor,
+        Quals, /*ConstRHS=*/false);
+    if (TryUsable(Copy))
+      goto CheckDestructor;
+
+    if (shouldDeleteForSubobjectCall(Subobj, PickFallback(Move, Copy), false))
+      return true;
+  }
 
   // C++11 [class.ctor]p5:
   // -- any direct or virtual base class, or non-static data member with no
@@ -9826,6 +9874,7 @@ bool SpecialMemberDeletionInfo::shouldDeleteForClassSubobject(
   // C++11 [class.ctor]p5, C++11 [class.copy]p11:
   // -- any direct or virtual base class or non-static data member has a
   //    type with a destructor that is deleted or inaccessible
+CheckDestructor:
   if (IsConstructor) {
     Sema::SpecialMemberOverloadResult SMOR =
         S.LookupSpecialMember(Class, CXXSpecialMemberKind::Destructor, false,

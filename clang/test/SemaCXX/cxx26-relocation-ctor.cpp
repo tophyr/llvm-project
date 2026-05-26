@@ -92,6 +92,17 @@ struct DefaultedGood {
   DefaultedGood(DefaultedGood reloc) = default;
 };
 
+struct CopyFallbackMember {
+  CopyFallbackMember();
+  CopyFallbackMember(const CopyFallbackMember &);
+  CopyFallbackMember(CopyFallbackMember &&) = delete;
+};
+
+struct DefaultedCopyFallback {
+  CopyFallbackMember member;
+  DefaultedCopyFallback(DefaultedCopyFallback reloc) = default;
+};
+
 struct TrivialCopyFallbackMember {
   int value;
   TrivialCopyFallbackMember() = default;
@@ -106,6 +117,11 @@ struct TrivialDefaultedCopyFallback {
 
 void test_explicit_reloc_on_decomposed_ctor_arg(DefaultedGood src reloc) {
   DefaultedGood dst = reloc src;
+  (void)dst;
+}
+
+void test_defaulted_copy_fallback_ctor(DefaultedCopyFallback src reloc) {
+  DefaultedCopyFallback dst = reloc src;
   (void)dst;
 }
 

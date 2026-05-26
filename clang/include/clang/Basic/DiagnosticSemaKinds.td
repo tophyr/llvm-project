@@ -4996,6 +4996,7 @@ def select_ovl_candidate_kind : TextSubstitution<
     "constructor (the implicit relocation constructor)|"
     "function (the implicit copy assignment operator)|"
     "function (the implicit move assignment operator)|"
+    "function (the implicit relocation assignment operator)|"
     "function (the implicit 'operator==' for this 'operator<=>)'|"
     "inherited constructor}0%select{| template| %2}1">;
 

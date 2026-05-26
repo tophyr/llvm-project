@@ -54,6 +54,20 @@ struct DefaultedGood : DefaultedBase {
   DefaultedGood &operator=(DefaultedGood src reloc) = default;
 };
 
+struct CopyAssignFallbackMember {
+  CopyAssignFallbackMember &operator=(const CopyAssignFallbackMember &);
+  CopyAssignFallbackMember &operator=(CopyAssignFallbackMember &&) = delete;
+};
+
+struct DefaultedCopyFallback {
+  CopyAssignFallbackMember member;
+  DefaultedCopyFallback &operator=(DefaultedCopyFallback src reloc) = default;
+};
+
+struct ImplicitCopyFallback {
+  CopyAssignFallbackMember member;
+};
+
 struct TrivialCopyAssignFallbackMember {
   int value;
   TrivialCopyAssignFallbackMember &
@@ -68,6 +82,28 @@ struct TrivialDefaultedCopyAssignFallback {
   operator=(TrivialDefaultedCopyAssignFallback src reloc) = default;
 };
 
+using ImplicitCopyFallbackAssign =
+    ImplicitCopyFallback &(ImplicitCopyFallback::*)(ImplicitCopyFallback);
+ImplicitCopyFallbackAssign implicit_copy_fallback_assign =
+    &ImplicitCopyFallback::operator=;
+
+void test_implicit_copy_fallback_assign(ImplicitCopyFallback a,
+                                        ImplicitCopyFallback b,
+                                        ImplicitCopyFallback c) {
+  a = reloc b;
+  a.operator=(reloc c);
+}
+
+struct DeletedImplicitRelocAssign {
+  int &ref;
+};
+
+void test_deleted_implicit_reloc_assign_note(DeletedImplicitRelocAssign a,
+                                             DeletedImplicitRelocAssign b) {
+  a.operator=(reloc b); // expected-error {{call to deleted member function 'operator='}}
+  // expected-note@-7 {{candidate function (the implicit copy assignment operator) has been implicitly deleted}}
+  // expected-note@-8 {{candidate function (the implicit relocation assignment operator) has been implicitly deleted}}
+}
 
 struct DefaultedBadConst {
   DefaultedBadConst &operator=(const DefaultedBadConst src reloc) = default; // expected-warning {{explicitly defaulted move assignment operator is implicitly deleted}}

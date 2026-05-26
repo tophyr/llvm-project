@@ -11592,6 +11592,7 @@ enum OverloadCandidateKind {
   oc_implicit_relocation_constructor,
   oc_implicit_copy_assignment,
   oc_implicit_move_assignment,
+  oc_implicit_relocation_assignment,
   oc_implicit_equality_comparison,
   oc_inherited_constructor
 };
@@ -11658,6 +11659,9 @@ ClassifyOverloadCandidate(Sema &S, const NamedDecl *Found,
 
       if (Meth->isMoveAssignmentOperator())
         return oc_implicit_move_assignment;
+
+      if (Meth->isRelocationAssignmentOperator())
+        return oc_implicit_relocation_assignment;
 
       if (Meth->isCopyAssignmentOperator())
         return oc_implicit_copy_assignment;
@@ -12627,6 +12631,9 @@ static void DiagnoseBadTarget(Sema &S, OverloadCandidate *Cand) {
       CSM = CXXSpecialMemberKind::CopyAssignment;
       break;
     case oc_implicit_move_assignment:
+      CSM = CXXSpecialMemberKind::MoveAssignment;
+      break;
+    case oc_implicit_relocation_assignment:
       CSM = CXXSpecialMemberKind::MoveAssignment;
       break;
     };
