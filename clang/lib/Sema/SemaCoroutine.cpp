@@ -1089,12 +1089,8 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
 
   Expr *Operand = E->IgnoreParens();
   if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(Operand)) {
-    if (DOE->isWholeObject()) {
-      Diag(Loc, diag::err_reloc_operand_not_complete_object)
-          << E->getSourceRange();
-      return ExprError();
-    }
-    if (!DOE->isDirectBaseSubobject() || DOE->isVirtualBaseSubobject()) {
+    if (!DOE->isWholeObject() &&
+        (!DOE->isDirectBaseSubobject() || DOE->isVirtualBaseSubobject())) {
       Diag(Loc, diag::err_reloc_operand_not_complete_object)
           << E->getSourceRange();
       return ExprError();

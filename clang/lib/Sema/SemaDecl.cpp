@@ -72,6 +72,40 @@
 using namespace clang;
 using namespace sema;
 
+static bool hasRelocDecompositionAccess(Sema &S, SourceLocation Loc,
+                                        CXXRecordDecl *RD,
+                                        FunctionDecl *FD) {
+  if (S.HasPrivateAccessToClass(Loc, RD, FD))
+    return true;
+
+  for (FunctionDecl *Redecl : FD->redecls()) {
+    if (Redecl != FD && S.HasPrivateAccessToClass(Loc, RD, Redecl))
+      return true;
+  }
+
+  for (FriendDecl *Friend : RD->friends()) {
+    const auto *FriendFD =
+        Friend ? dyn_cast_or_null<FunctionDecl>(Friend->getFriendDecl())
+               : nullptr;
+    if (!FriendFD)
+      continue;
+    if (FriendFD->getDeclName() != FD->getDeclName())
+      continue;
+    if (!S.Context.hasSameType(FriendFD->getType(), FD->getType()))
+      continue;
+    if (FriendFD->getNumParams() != FD->getNumParams())
+      continue;
+    if (!llvm::equal(FriendFD->parameters(), FD->parameters(),
+                     [](const ParmVarDecl *A, const ParmVarDecl *B) {
+                       return A->isRelocParameter() == B->isRelocParameter();
+                     }))
+      continue;
+    return true;
+  }
+
+  return false;
+}
+
 Sema::DeclGroupPtrTy Sema::ConvertDeclToDeclGroup(Decl *Ptr, Decl *OwnedType) {
   if (OwnedType) {
     Decl *Group[2] = { OwnedType, Ptr };
@@ -3559,6 +3593,15 @@ static bool hasIdenticalPassObjectSizeAttrs(const FunctionDecl *A,
   return std::equal(A->param_begin(), A->param_end(), B->param_begin(), AttrEq);
 }
 
+static bool hasIdenticalRelocParameterAttrs(const FunctionDecl *A,
+                                            const FunctionDecl *B) {
+  assert(A->getNumParams() == B->getNumParams());
+  return std::equal(A->param_begin(), A->param_end(), B->param_begin(),
+                    [](const ParmVarDecl *A, const ParmVarDecl *B) {
+                      return A->isRelocParameter() == B->isRelocParameter();
+                    });
+}
+
 /// If necessary, adjust the semantic declaration context for a qualified
 /// declaration to name the correct inline namespace within the qualifier.
 static void adjustDeclContextForDeclaratorDecl(DeclaratorDecl *NewD,
@@ -3875,6 +3918,14 @@ bool Sema::MergeFunctionDecl(FunctionDecl *New, NamedDecl *&OldD, Scope *S,
   if (Old->getNumParams() > 0 && Old->getNumParams() == New->getNumParams() &&
       !hasIdenticalPassObjectSizeAttrs(Old, New)) {
     Diag(New->getLocation(), diag::err_different_pass_object_size_params)
+        << New->getDeclName();
+    Diag(OldLocation, PrevDiag) << Old << Old->getType();
+    return true;
+  }
+
+  if (Old->getNumParams() > 0 && Old->getNumParams() == New->getNumParams() &&
+      !hasIdenticalRelocParameterAttrs(Old, New)) {
+    Diag(New->getLocation(), diag::err_reloc_parameter_mismatch)
         << New->getDeclName();
     Diag(OldLocation, PrevDiag) << Old << Old->getType();
     return true;
@@ -7870,6 +7921,18 @@ NamedDecl *Sema::ActOnVariableDeclarator(
       InvalidRelocObject = true;
     }
 
+    CXXDestructorDecl *Dtor =
+        RD ? LookupDestructor(const_cast<CXXRecordDecl *>(RD)) : nullptr;
+    if (!InvalidRelocObject && RD->isCompleteDefinition() && Dtor &&
+        Dtor->isUserProvided() &&
+        !HasPrivateAccessToClass(NewVD->getLocation(),
+                                 const_cast<CXXRecordDecl *>(RD))) {
+      Diag(NewVD->getLocation(),
+           diag::err_reloc_object_user_provided_destructor)
+          << RelocType;
+      InvalidRelocObject = true;
+    }
+
     if (InvalidRelocObject)
       NewVD->setInvalidDecl();
   }
@@ -10472,7 +10535,7 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
         continue;
 
       auto *Ctor = dyn_cast<CXXConstructorDecl>(NewFD);
-      if (I != 0) {
+      if (Ctor && I != 0) {
         Diag(Param->getLocation(), diag::err_reloc_parameter_must_be_first);
         NewFD->setInvalidDecl();
         continue;
@@ -10496,8 +10559,35 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
         continue;
       }
 
-      Diag(Param->getLocation(), diag::err_reloc_parameter_invalid_context);
-      NewFD->setInvalidDecl();
+      if (auto *RD = Param->getType()->getAsCXXRecordDecl();
+          RD && RD->isCompleteDefinition()) {
+        CXXDestructorDecl *Dtor = LookupDestructor(RD);
+        if (Dtor && Dtor->isUserProvided() &&
+            !hasRelocDecompositionAccess(*this, Param->getLocation(), RD,
+                                         NewFD)) {
+          Diag(Param->getLocation(),
+               diag::err_reloc_object_user_provided_destructor)
+              << Param->getType();
+          NewFD->setInvalidDecl();
+          continue;
+        }
+
+        auto *MoveCtor = LookupMovingConstructor(RD, /*Quals=*/0);
+        auto *CopyCtor = LookupCopyingConstructor(RD, /*Quals=*/0);
+        CXXConstructorDecl *RelocCtor = nullptr;
+        for (auto *Ctor : RD->ctors()) {
+          if (Ctor->isRelocationConstructor() && !Ctor->isDeleted()) {
+            RelocCtor = Ctor;
+            break;
+          }
+        }
+        if (!RelocCtor && (!MoveCtor || MoveCtor->isDeleted()) &&
+            (!CopyCtor || CopyCtor->isDeleted())) {
+          Diag(Param->getLocation(), diag::err_reloc_parameter_unmovable_type)
+              << Param->getType();
+          NewFD->setInvalidDecl();
+        }
+      }
     }
   }
 

@@ -1603,6 +1603,14 @@ Sema::AccessResult Sema::CheckUnresolvedMemberAccess(UnresolvedMemberExpr *E,
   return CheckAccess(*this, E->getMemberLoc(), Entity);
 }
 
+bool Sema::HasPrivateAccessToClass(SourceLocation Loc, CXXRecordDecl *Class,
+                                   DeclContext *UseDC) {
+  EffectiveContext EC(UseDC ? UseDC : CurContext);
+  Class = Class->getCanonicalDecl();
+  return EC.includesClass(Class) ||
+         GetFriendKind(*this, EC, Class) == ::AR_accessible;
+}
+
 bool Sema::isMemberAccessibleForDeletion(CXXRecordDecl *NamingClass,
                                          DeclAccessPair Found,
                                          QualType ObjectType,

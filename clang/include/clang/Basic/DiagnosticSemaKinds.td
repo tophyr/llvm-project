@@ -7962,6 +7962,8 @@ def err_reloc_object_invalid_context : Error<
   "'reloc' may only appear on a function parameter or local variable definition">;
 def err_reloc_object_bad_type : Error<
   "'reloc' may only be applied to a non-union class object of non-reference type">;
+def err_reloc_object_user_provided_destructor : Error<
+  "'reloc' may not decompose type %0 because its destructor is user-provided">;
 def err_reloc_parameter_invalid_context : Error<
   "'reloc' parameter syntax is only valid on a constructor or assignment "
   "operator parameter">;
@@ -8009,6 +8011,10 @@ def err_decomposed_object_decltype_paren : Error<
   "decomposed object %0 cannot be parenthesized in a decltype operand">;
 def err_decomposed_object_member_pointer_not_constant : Error<
   "pointer-to-member access through decomposed object %0 requires a constant-evaluated member pointer">;
+def err_reloc_parameter_mismatch : Error<
+  "'reloc' parameter mismatch in redeclaration of %0">;
+def err_reloc_parameter_unmovable_type : Error<
+  "'reloc' parameter type %0 must have an eligible relocation, move, or copy constructor">;
 
 def err_ref_qualifier_overload : Error<
   "cannot overload a member function %select{without a ref-qualifier|with "

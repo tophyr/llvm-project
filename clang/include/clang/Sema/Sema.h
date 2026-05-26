@@ -7972,6 +7972,7 @@ public:
       SourceLocation CallLoc, FunctionDecl *FDecl,
       const FunctionProtoType *Proto, unsigned FirstParam,
       ArrayRef<Expr *> Args, SmallVectorImpl<Expr *> &AllArgs,
+      Expr *CalleeExpr = nullptr,
       VariadicCallType CallType = VariadicCallType::DoesNotApply,
       bool AllowExplicit = false, bool IsListInitialization = false);
 
@@ -9517,6 +9518,11 @@ public:
   ///
   /// \returns The destructor for this class.
   CXXDestructorDecl *LookupDestructor(CXXRecordDecl *Class);
+
+  /// Determine whether the current context has private access privileges to
+  /// the given class.
+  bool HasPrivateAccessToClass(SourceLocation Loc, CXXRecordDecl *Class,
+                               DeclContext *UseDC = nullptr);
 
   /// Force the declaration of any implicitly-declared members of this
   /// class.

@@ -6186,6 +6186,7 @@ ParmVarDecl *TreeTransform<Derived>::TransformFunctionTypeParam(
                                              /* DefArg */ nullptr);
   newParm->setScopeInfo(OldParm->getFunctionScopeDepth(),
                         OldParm->getFunctionScopeIndex() + indexAdjustment);
+  newParm->setIsRelocParameter(OldParm->isRelocParameter());
   transformedLocalDecl(OldParm, {newParm});
   return newParm;
 }

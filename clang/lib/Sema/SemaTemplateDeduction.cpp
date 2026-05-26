@@ -4531,7 +4531,8 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
 
   // Deduce an argument of type ParamType from an expression with index ArgIdx.
   auto DeduceCallArgument = [&](QualType ParamType, unsigned ArgIdx,
-                                bool ExplicitObjectArgument) {
+                                bool ExplicitObjectArgument,
+                                bool DecomposedParam) {
     // C++ [demp.deduct.call]p1: (DR1391)
     //   Template argument deduction is done by comparing each function template
     //   parameter that contains template-parameters that participate in
@@ -4545,14 +4546,14 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
           *this, TemplateParams, FirstInnerIndex, ParamType, ObjectType,
           ObjectClassification,
           /*Arg=*/nullptr, Info, Deduced, OriginalCallArgs,
-          /*Decomposed*/ false, ArgIdx, /*TDF*/ 0);
+          DecomposedParam, ArgIdx, /*TDF*/ 0);
     }
 
     //   ... with the type of the corresponding argument
     return DeduceTemplateArgumentsFromCallArgument(
         *this, TemplateParams, FirstInnerIndex, ParamType,
         Args[ArgIdx]->getType(), Args[ArgIdx]->Classify(getASTContext()),
-        Args[ArgIdx], Info, Deduced, OriginalCallArgs, /*Decomposed*/ false,
+        Args[ArgIdx], Info, Deduced, OriginalCallArgs, DecomposedParam,
         ArgIdx, /*TDF*/ 0);
   };
 
@@ -4571,20 +4572,25 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
         break;
 
       ParamTypesForArgChecking.push_back(ParamType);
+      bool DecomposedParam =
+          ParamIdx < Function->getNumParams() &&
+          Function->getParamDecl(ParamIdx)->isRelocParameter();
 
       if (ParamIdx == 0 && HasExplicitObject) {
         if (ObjectType.isNull())
           return TemplateDeductionResult::InvalidExplicitArguments;
 
         if (auto Result = DeduceCallArgument(ParamType, 0,
-                                             /*ExplicitObjectArgument=*/true);
+                                             /*ExplicitObjectArgument=*/true,
+                                             /*DecomposedParam=*/false);
             Result != TemplateDeductionResult::Success)
           return Result;
         continue;
       }
 
       if (auto Result = DeduceCallArgument(ParamType, ArgIdx++,
-                                           /*ExplicitObjectArgument=*/false);
+                                           /*ExplicitObjectArgument=*/false,
+                                           DecomposedParam);
           Result != TemplateDeductionResult::Success)
         return Result;
 
@@ -4619,7 +4625,8 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
            PackScope.nextPackElement(), ++ArgIdx) {
         ParamTypesForArgChecking.push_back(ParamPattern);
         if (auto Result = DeduceCallArgument(ParamPattern, ArgIdx,
-                                             /*ExplicitObjectArgument=*/false);
+                                             /*ExplicitObjectArgument=*/false,
+                                             /*DecomposedParam=*/false);
             Result != TemplateDeductionResult::Success)
           return Result;
       }
@@ -4660,7 +4667,8 @@ TemplateDeductionResult Sema::DeduceTemplateArguments(
           ParamTypesForArgChecking.push_back(ParamPattern);
           if (auto Result =
                   DeduceCallArgument(ParamPattern, ArgIdx,
-                                     /*ExplicitObjectArgument=*/false);
+                                     /*ExplicitObjectArgument=*/false,
+                                     /*DecomposedParam=*/false);
               Result != TemplateDeductionResult::Success)
             return Result;
 

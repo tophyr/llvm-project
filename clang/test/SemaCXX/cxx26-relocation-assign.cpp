@@ -18,7 +18,7 @@ struct TemplateBad {
 };
 
 struct BadContext {
-  void assign(BadContext reloc); // expected-error {{'reloc' parameter syntax is only valid on a constructor or assignment operator parameter}}
+  void assign(BadContext reloc);
 };
 
 struct ImplicitGood {};

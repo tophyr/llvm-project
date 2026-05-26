@@ -63,6 +63,27 @@ static bool isRelocGlvalueArgument(Expr *Arg) {
   return RE && RE->getOperand()->isGLValue();
 }
 
+static const CXXDecomposedObjectExpr *getWholeDecomposedArg(Expr *Arg) {
+  const auto *DOE =
+      dyn_cast<CXXDecomposedObjectExpr>(Arg->IgnoreParenImpCasts());
+  return DOE && DOE->isWholeObject() ? DOE : nullptr;
+}
+
+static Expr *getOverloadArgForParameter(Sema &S, const FunctionDecl *Function,
+                                        unsigned ParamIndex, Expr *Arg) {
+  if (!Function || ParamIndex >= Function->getNumParams())
+    return Arg;
+
+  if (!getWholeDecomposedArg(Arg))
+    return Arg;
+
+  const auto *Param = Function->getParamDecl(ParamIndex);
+  if (!Param->isRelocParameter())
+    return nullptr;
+
+  return new (S.Context) CXXRelocExpr(Arg->getType(), Arg, Arg->getExprLoc());
+}
+
 /// A convenience routine for creating a decayed reference to a function.
 static ExprResult CreateFunctionRefExpr(
     Sema &S, FunctionDecl *Fn, NamedDecl *FoundDecl, const Expr *Base,
@@ -7306,8 +7327,16 @@ void Sema::AddOverloadCandidate(
       if (ParamABI == ParameterABI::HLSLOut ||
           ParamABI == ParameterABI::HLSLInOut)
         ParamType = ParamType.getNonReferenceType();
+      Expr *Arg = getOverloadArgForParameter(*this, Function, ArgIdx, Args[ArgIdx]);
+      if (!Arg) {
+        Candidate.Conversions[ConvIdx].setBad(
+            BadConversionSequence::no_conversion, Args[ArgIdx], ParamType);
+        Candidate.Viable = false;
+        Candidate.FailureKind = ovl_fail_bad_conversion;
+        return;
+      }
       Candidate.Conversions[ConvIdx] = TryCopyInitialization(
-          *this, Args[ArgIdx], ParamType, SuppressUserConversions,
+          *this, Arg, ParamType, SuppressUserConversions,
           /*InOverloadResolution=*/true,
           /*AllowObjCWritebackConversion=*/
           getLangOpts().ObjCAutoRefCount, AllowExplicitConversions);
@@ -7867,8 +7896,18 @@ void Sema::AddMethodCandidate(
       } else {
         ParamType = Proto->getParamType(ArgIdx + ExplicitOffset);
       }
+      Expr *Arg = getOverloadArgForParameter(*this, Method,
+                                             ArgIdx + ExplicitOffset,
+                                             Args[ArgIdx]);
+      if (!Arg) {
+        Candidate.Conversions[ConvIdx].setBad(
+            BadConversionSequence::no_conversion, Args[ArgIdx], ParamType);
+        Candidate.Viable = false;
+        Candidate.FailureKind = ovl_fail_bad_conversion;
+        return;
+      }
       Candidate.Conversions[ConvIdx]
-        = TryCopyInitialization(*this, Args[ArgIdx], ParamType,
+        = TryCopyInitialization(*this, Arg, ParamType,
                                 SuppressUserConversions,
                                 /*InOverloadResolution=*/true,
                                 /*AllowObjCWritebackConversion=*/
@@ -8260,8 +8299,23 @@ bool Sema::CheckNonDependentConversions(
       if (UserConversionFlag.OnlyInitializeNonUserDefinedConversions &&
           MaybeInvolveUserDefinedConversion(ParamType, Args[I]->getType()))
         continue;
+      Expr *Arg = getOverloadArgForParameter(*this, FD, I + Offset, Args[I]);
+      if (!Arg) {
+        Conversions[ConvIdx].setBad(BadConversionSequence::no_conversion,
+                                    Args[I], ParamType);
+        return true;
+      }
+      if (isa<CXXRelocExpr>(Arg->IgnoreParenImpCasts()) &&
+          !ParamType->isReferenceType() && ParamType->isRecordType() &&
+          Context.hasSameUnqualifiedType(Arg->getType(), ParamType)) {
+        Conversions[ConvIdx].setStandard();
+        Conversions[ConvIdx].Standard.setAsIdentityConversion();
+        Conversions[ConvIdx].Standard.setFromType(Arg->getType());
+        Conversions[ConvIdx].Standard.setAllToTypes(ParamType);
+        continue;
+      }
       Conversions[ConvIdx] = TryCopyInitialization(
-          *this, Args[I], ParamType, UserConversionFlag.SuppressUserConversions,
+          *this, Arg, ParamType, UserConversionFlag.SuppressUserConversions,
           /*InOverloadResolution=*/true,
           /*AllowObjCWritebackConversion=*/
           getLangOpts().ObjCAutoRefCount, AllowExplicit);

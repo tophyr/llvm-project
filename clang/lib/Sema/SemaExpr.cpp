@@ -71,6 +71,43 @@
 using namespace clang;
 using namespace sema;
 
+static const FunctionDecl *resolveCallFunctionDecl(const Expr *E,
+                                                   const ASTContext &Context) {
+  if (!E)
+    return nullptr;
+
+  E = E->IgnoreParenImpCasts();
+  if (E->isValueDependent())
+    return nullptr;
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    if (const auto *FD = dyn_cast<FunctionDecl>(DRE->getDecl()))
+      return FD;
+    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+      if (const Expr *Init = VD->getInit())
+        return resolveCallFunctionDecl(Init, Context);
+    return nullptr;
+  }
+
+  if (const auto *UO = dyn_cast<UnaryOperator>(E))
+    if (UO->getOpcode() == UO_AddrOf)
+      return resolveCallFunctionDecl(UO->getSubExpr(), Context);
+
+  if (const auto *ME = dyn_cast<MemberExpr>(E))
+    if (const auto *FD = dyn_cast<FunctionDecl>(ME->getMemberDecl()))
+      return FD;
+
+  if (const auto *BO = dyn_cast<BinaryOperator>(E);
+      BO && (BO->getOpcode() == BO_PtrMemD || BO->getOpcode() == BO_PtrMemI))
+    return resolveCallFunctionDecl(BO->getRHS(), Context);
+
+  Expr::EvalResult Result;
+  if (E->EvaluateAsRValue(Result, Context) && Result.Val.isMemberPointer())
+    return dyn_cast_or_null<FunctionDecl>(Result.Val.getMemberPointerDecl());
+
+  return nullptr;
+}
+
 bool Sema::CanUseDecl(NamedDecl *D, bool TreatUnavailableAsInvalid) {
   // See if this is an auto-typed variable whose initializer we are parsing.
   if (ParsingInitForAutoVars.count(D))
@@ -6020,7 +6057,7 @@ Sema::ConvertArgumentsForCall(CallExpr *Call, Expr *Fn,
   VariadicCallType CallType = getVariadicCallType(FDecl, Proto, Fn);
 
   Invalid = GatherArgumentsForCall(Call->getExprLoc(), FDecl, Proto, 0, Args,
-                                   AllArgs, CallType);
+                                   AllArgs, Fn, CallType);
   if (Invalid)
     return true;
   unsigned TotalNumArgs = AllArgs.size();
@@ -6035,17 +6072,23 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc, FunctionDecl *FDecl,
                                   const FunctionProtoType *Proto,
                                   unsigned FirstParam, ArrayRef<Expr *> Args,
                                   SmallVectorImpl<Expr *> &AllArgs,
+                                  Expr *CalleeExpr,
                                   VariadicCallType CallType, bool AllowExplicit,
                                   bool IsListInitialization) {
   unsigned NumParams = Proto->getNumParams();
   bool Invalid = false;
   size_t ArgIx = 0;
+  const FunctionDecl *ResolvedFD = FDecl;
+  if (!ResolvedFD)
+    ResolvedFD = resolveCallFunctionDecl(CalleeExpr, Context);
   // Continue to check argument types (even if we have too few/many args).
   for (unsigned i = FirstParam; i < NumParams; i++) {
     QualType ProtoArgType = Proto->getParamType(i);
 
     Expr *Arg;
-    ParmVarDecl *Param = FDecl ? FDecl->getParamDecl(i) : nullptr;
+    ParmVarDecl *Param =
+        ResolvedFD ? const_cast<ParmVarDecl *>(ResolvedFD->getParamDecl(i))
+                   : nullptr;
     if (ArgIx < Args.size()) {
       Arg = Args[ArgIx++];
 
@@ -6081,6 +6124,17 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc, FunctionDecl *FDecl,
                                                          ProtoArgType)
                 : InitializedEntity::InitializeParameter(
                       Context, ProtoArgType, Proto->isParamConsumed(i));
+
+      if (Param && Param->isRelocParameter()) {
+        if (const auto *DOE =
+                dyn_cast<CXXDecomposedObjectExpr>(Arg->IgnoreParenImpCasts());
+            DOE && DOE->isWholeObject()) {
+          ExprResult RelocArg = ActOnRelocExpr(/*S=*/nullptr, Arg->getExprLoc(), Arg);
+          if (RelocArg.isInvalid())
+            return true;
+          Arg = RelocArg.get();
+        }
+      }
 
       // Remember that parameter belongs to a CF audited API.
       if (CFAudited)

@@ -2483,7 +2483,7 @@ ExprResult Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
       NumImplicitArgs++;
     if (GatherArgumentsForCall(AllocationParameterRange.getBegin(), OperatorNew,
                                Proto, NumImplicitArgs, PlacementArgs,
-                               AllPlaceArgs, CallType))
+                               AllPlaceArgs, /*CalleeExpr=*/nullptr, CallType))
       return ExprError();
 
     if (!AllPlaceArgs.empty())

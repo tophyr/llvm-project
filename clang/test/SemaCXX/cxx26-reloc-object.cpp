@@ -40,6 +40,33 @@ struct W : B {
   W &operator=(const W &);
 };
 
+struct UserDtor {
+  UserDtor();
+  ~UserDtor();
+};
+
+struct PrivilegedUserDtor {
+  PrivilegedUserDtor();
+  ~PrivilegedUserDtor();
+
+  static void ok() {
+    PrivilegedUserDtor local reloc;
+    (void)local.this;
+  }
+};
+
+struct FriendUserDtor {
+  FriendUserDtor();
+  ~FriendUserDtor();
+
+  friend void friend_local_ok();
+};
+
+void friend_local_ok() {
+  FriendUserDtor local reloc;
+  (void)local.this;
+}
+
 union UnionS {
   S s;
 };
@@ -122,4 +149,5 @@ void bad() {
   int &ref = scalar;
   int &bad_ref reloc = ref; // expected-error {{'reloc' may only be applied to a non-union class object of non-reference type}}
   UnionS us reloc; // expected-error {{'reloc' may only be applied to a non-union class object of non-reference type}}
+  UserDtor user reloc; // expected-error {{'reloc' may not decompose type 'UserDtor' because its destructor is user-provided}}
 }

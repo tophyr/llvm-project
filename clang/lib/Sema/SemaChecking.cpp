@@ -14181,6 +14181,108 @@ void Sema::CheckCompletedExpr(Expr *E, SourceLocation CheckLoc,
         return ParenDepth == 0;
       }
 
+      static bool isRelocParameter(const FunctionDecl *FD, unsigned Index) {
+        return FD && Index < FD->getNumParams() &&
+               FD->getParamDecl(Index)->isRelocParameter();
+      }
+
+      static bool exprContainsDecomposedObject(const Expr *E,
+                                               const CXXDecomposedObjectExpr *DOE) {
+        while (E) {
+          E = E->IgnoreParenImpCasts();
+          if (E == DOE)
+            return true;
+          if (const auto *CE = dyn_cast<CXXConstructExpr>(E)) {
+            if (CE->getNumArgs() != 1)
+              return false;
+            E = CE->getArg(0);
+            continue;
+          }
+          if (const auto *BTE = dyn_cast<CXXBindTemporaryExpr>(E)) {
+            E = BTE->getSubExpr();
+            continue;
+          }
+          if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E)) {
+            E = MTE->getSubExpr();
+            continue;
+          }
+          return false;
+        }
+        return false;
+      }
+
+      const FunctionDecl *resolveFunctionPointerCallee(const Expr *E) const {
+        E = E->IgnoreParenImpCasts();
+        if (E->isValueDependent())
+          return nullptr;
+
+        if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+          if (const auto *FD = dyn_cast<FunctionDecl>(DRE->getDecl()))
+            return FD;
+          if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+            if (const Expr *Init = VD->getInit())
+              return resolveFunctionPointerCallee(Init);
+          return nullptr;
+        }
+
+        if (const auto *UO = dyn_cast<UnaryOperator>(E))
+          if (UO->getOpcode() == UO_AddrOf)
+            return resolveFunctionPointerCallee(UO->getSubExpr());
+
+        if (const auto *ME = dyn_cast<MemberExpr>(E))
+          if (const auto *FD = dyn_cast<FunctionDecl>(ME->getMemberDecl()))
+            return FD;
+
+        if (const auto *BO = dyn_cast<BinaryOperator>(E);
+            BO && (BO->getOpcode() == BO_PtrMemD ||
+                   BO->getOpcode() == BO_PtrMemI))
+          return resolveFunctionPointerCallee(BO->getRHS());
+
+        Expr::EvalResult Result;
+        if (E->EvaluateAsRValue(Result, S.Context) &&
+            Result.Val.isMemberPointer())
+          return dyn_cast_or_null<FunctionDecl>(Result.Val.getMemberPointerDecl());
+
+        return nullptr;
+      }
+
+      bool isRelocCallArgument(const CXXDecomposedObjectExpr *DOE) const {
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const auto *Call = dyn_cast<CallExpr>(Parents[I - 2]);
+          if (!Call)
+            continue;
+
+          const FunctionDecl *FD = Call->getDirectCallee();
+          if (!FD)
+            FD = resolveFunctionPointerCallee(Call->getCallee());
+
+          for (unsigned ArgIndex = 0, E = Call->getNumArgs(); ArgIndex != E;
+               ++ArgIndex)
+            if (exprContainsDecomposedObject(Call->getArg(ArgIndex), DOE))
+              return isRelocParameter(FD, ArgIndex);
+        }
+        return false;
+      }
+
+      bool isRelocCtorArgument(const CXXDecomposedObjectExpr *DOE) const {
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const auto *Ctor = dyn_cast<CXXConstructExpr>(Parents[I - 2]);
+          if (!Ctor)
+            continue;
+
+          const CXXConstructorDecl *CtorDecl = Ctor->getConstructor();
+          if (!CtorDecl)
+            continue;
+
+          for (unsigned ArgIndex = 0, E = Ctor->getNumArgs(); ArgIndex != E;
+               ++ArgIndex)
+            if (exprContainsDecomposedObject(Ctor->getArg(ArgIndex), DOE))
+              return ArgIndex < CtorDecl->getNumParams() &&
+                     CtorDecl->getParamDecl(ArgIndex)->isRelocParameter();
+        }
+        return false;
+      }
+
       bool VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *DOE) {
         if (!DOE->isWholeObject())
           return true;
@@ -14216,6 +14318,11 @@ void Sema::CheckCompletedExpr(Expr *E, SourceLocation CheckLoc,
         if (const auto *ME = dyn_cast_or_null<MemberExpr>(Parent))
           if (ME->getBase()->IgnoreParenImpCasts() == DOE)
             return true;
+        if (const auto *ME =
+                dyn_cast_or_null<CXXDependentScopeMemberExpr>(Parent))
+          if (!ME->isImplicitAccess() &&
+              ME->getBase()->IgnoreParenImpCasts() == DOE)
+            return true;
         if (const auto *BO = dyn_cast_or_null<BinaryOperator>(Parent))
           if ((BO->getOpcode() == BO_PtrMemD || BO->getOpcode() == BO_PtrMemI) &&
               BO->getLHS()->IgnoreParenImpCasts() == DOE)
@@ -14224,6 +14331,11 @@ void Sema::CheckCompletedExpr(Expr *E, SourceLocation CheckLoc,
                 dyn_cast_or_null<CXXDecomposedObjectExpr>(Parent))
           if (DOEParent->getOperand()->IgnoreParenImpCasts() == DOE)
             return true;
+        if (const auto *RE = dyn_cast_or_null<CXXRelocExpr>(Parent))
+          if (RE->getOperand()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (isRelocCallArgument(DOE) || isRelocCtorArgument(DOE))
+          return true;
 
         S.Diag(DOE->getExprLoc(), diag::err_decomposed_object_value_use) << VD;
         return true;

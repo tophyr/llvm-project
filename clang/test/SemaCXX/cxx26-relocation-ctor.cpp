@@ -34,8 +34,8 @@ struct TemplateBad {
   TemplateBad(TemplateBad reloc, T); // expected-error {{'reloc' parameter must have the same unqualified type as its enclosing class}}
 };
 
-void not_a_ctor(int reloc); // expected-error {{'reloc' parameter syntax is only valid on a constructor or assignment operator parameter}}
-void also_not_a_ctor(int x reloc); // expected-error {{'reloc' parameter syntax is only valid on a constructor or assignment operator parameter}}
+void not_a_ctor(int reloc);
+void also_not_a_ctor(int x reloc);
 
 struct NamedRelocStillAllowedOutsideParams {
   int reloc;
@@ -104,6 +104,10 @@ struct TrivialDefaultedCopyFallback {
   TrivialDefaultedCopyFallback(TrivialDefaultedCopyFallback reloc) = default;
 };
 
+void test_explicit_reloc_on_decomposed_ctor_arg(DefaultedGood src reloc) {
+  DefaultedGood dst = reloc src;
+  (void)dst;
+}
 
 struct DefaultedBadConst {
   DefaultedBadConst(const DefaultedBadConst reloc) = default; // expected-warning {{explicitly defaulted move constructor is implicitly deleted}}
