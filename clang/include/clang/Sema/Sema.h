@@ -3138,6 +3138,7 @@ public:
                                StringRef Keyword);
   ExprResult ActOnCoawaitExpr(Scope *S, SourceLocation KwLoc, Expr *E);
   ExprResult ActOnCoyieldExpr(Scope *S, SourceLocation KwLoc, Expr *E);
+  ExprResult ActOnRelocExpr(Scope *S, SourceLocation KwLoc, Expr *E);
   StmtResult ActOnCoreturnStmt(Scope *S, SourceLocation KwLoc, Expr *E);
 
   ExprResult BuildOperatorCoawaitLookupExpr(Scope *S, SourceLocation Loc);

@@ -864,6 +864,20 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
   ParseIdentifier: {    // primary-expression: identifier
                         // unqualified-id: identifier
                         // constant: enumeration-constant
+    if (getLangOpts().CPlusPlus && Tok.getIdentifierInfo()) {
+      if (!Ident_reloc)
+        Ident_reloc = &PP.getIdentifierTable().get("reloc");
+      if (Tok.getIdentifierInfo() == Ident_reloc) {
+        if (NotPrimaryExpression)
+          *NotPrimaryExpression = true;
+        SourceLocation RelocLoc = ConsumeToken();
+        Res = ParseCastExpression(CastParseKind::AnyCastExpr);
+        if (!Res.isInvalid())
+          Res = Actions.ActOnRelocExpr(getCurScope(), RelocLoc, Res.get());
+        return Res;
+      }
+    }
+
     // Turn a potentially qualified name into a annot_typename or
     // annot_cxxscope if it would be valid.  This handles things like x::y, etc.
     if (getLangOpts().CPlusPlus) {

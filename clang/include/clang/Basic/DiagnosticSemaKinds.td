@@ -7968,6 +7968,18 @@ def err_reloc_parameter_must_be_first : Error<
 def err_reloc_parameter_bad_type : Error<
   "'reloc' parameter must have the same unqualified type as its enclosing "
   "class">;
+def err_reloc_parameter_non_declaration : Error<
+  "'reloc' parameter is only permitted in a function declaration">;
+def err_reloc_operand_not_glvalue : Error<
+  "'reloc' operand must be a glvalue or prvalue of object type">;
+def err_reloc_operand_not_local : Error<
+  "'reloc' operand must name a local variable or parameter">;
+def err_reloc_operand_not_complete_object : Error<
+  "'reloc' operand must name a complete object">;
+def err_reloc_operand_binding : Error<
+  "'reloc' operand cannot name a structured binding">;
+def err_reloc_operand_capture : Error<
+  "'reloc' operand cannot name a lambda capture">;
 def err_explicit_object_parameter_mutable: Error<
   "a lambda with an explicit object parameter cannot be mutable">;
 def err_invalid_explicit_object_type_in_lambda: Error<

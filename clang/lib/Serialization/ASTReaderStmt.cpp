@@ -491,6 +491,12 @@ void ASTStmtReader::VisitCoyieldExpr(CoyieldExpr *E) {
   E->OpaqueValue = cast_or_null<OpaqueValueExpr>(Record.readSubStmt());
 }
 
+void ASTStmtReader::VisitCXXRelocExpr(CXXRelocExpr *E) {
+  VisitExpr(E);
+  E->setRelocLoc(readSourceLocation());
+  E->setOperand(Record.readSubExpr());
+}
+
 void ASTStmtReader::VisitDependentCoawaitExpr(DependentCoawaitExpr *E) {
   VisitExpr(E);
   E->KeywordLoc = readSourceLocation();
@@ -4405,6 +4411,10 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
 
     case EXPR_COYIELD:
       S = new (Context) CoyieldExpr(Empty);
+      break;
+
+    case EXPR_CXX_RELOC:
+      S = new (Context) CXXRelocExpr(Empty);
       break;
 
     case EXPR_DEPENDENT_COAWAIT:

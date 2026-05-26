@@ -17404,6 +17404,8 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
 
   case Expr::ParenExprClass:
     return CheckICE(cast<ParenExpr>(E)->getSubExpr(), Ctx);
+  case Expr::CXXRelocExprClass:
+    return CheckICE(cast<CXXRelocExpr>(E)->getOperand(), Ctx);
   case Expr::GenericSelectionExprClass:
     return CheckICE(cast<GenericSelectionExpr>(E)->getResultExpr(), Ctx);
   case Expr::IntegerLiteralClass:

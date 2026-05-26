@@ -5186,6 +5186,13 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
           QualType ParamTy = Param->getType();
           assert(!ParamTy.isNull() && "Couldn't parse type?");
 
+          if (Param->isRelocParameter() && !D.isDeclarationOfFunction()) {
+            S.Diag(Param->getLocation(),
+                   diag::err_reloc_parameter_non_declaration);
+            D.setInvalidType(true);
+            Param->setIsRelocParameter(false);
+          }
+
           // Look for 'void'.  void is allowed only as a single parameter to a
           // function with no other parameters (C99 6.7.5.3p10).  We record
           // int(void) as a FunctionProtoType with an empty parameter list.

@@ -3670,6 +3670,14 @@ public:
     return SemaRef.BuildCXXNoexceptExpr(Range.getBegin(), Arg, Range.getEnd());
   }
 
+  /// Build a new relocation expression.
+  ///
+  /// By default, performs semantic analysis to build the new expression.
+  /// Subclasses may override this routine to provide different behavior.
+  ExprResult RebuildCXXRelocExpr(SourceLocation Loc, Expr *Arg) {
+    return SemaRef.ActOnRelocExpr(SemaRef.getCurScope(), Loc, Arg);
+  }
+
   UnsignedOrNone
   ComputeSizeOfPackExprWithoutSubstitution(ArrayRef<TemplateArgument> PackArgs);
 
@@ -16064,6 +16072,18 @@ TreeTransform<Derived>::TransformCXXNoexceptExpr(CXXNoexceptExpr *E) {
     return E;
 
   return getDerived().RebuildCXXNoexceptExpr(E->getSourceRange(),SubExpr.get());
+}
+
+template<typename Derived>
+ExprResult TreeTransform<Derived>::TransformCXXRelocExpr(CXXRelocExpr *E) {
+  ExprResult SubExpr = getDerived().TransformExpr(E->getOperand());
+  if (SubExpr.isInvalid())
+    return ExprError();
+
+  if (!getDerived().AlwaysRebuild() && SubExpr.get() == E->getOperand())
+    return E;
+
+  return getDerived().RebuildCXXRelocExpr(E->getRelocLoc(), SubExpr.get());
 }
 
 template<typename Derived>

@@ -458,6 +458,13 @@ void ASTStmtWriter::VisitCoyieldExpr(CoyieldExpr *E) {
   Code = serialization::EXPR_COYIELD;
 }
 
+void ASTStmtWriter::VisitCXXRelocExpr(CXXRelocExpr *E) {
+  VisitExpr(E);
+  Record.AddSourceLocation(E->getRelocLoc());
+  Record.AddStmt(E->getOperand());
+  Code = serialization::EXPR_CXX_RELOC;
+}
+
 void ASTStmtWriter::VisitDependentCoawaitExpr(DependentCoawaitExpr *E) {
   VisitExpr(E);
   Record.AddSourceLocation(E->getKeywordLoc());

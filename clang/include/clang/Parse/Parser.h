@@ -2834,6 +2834,7 @@ private:
   mutable IdentifierInfo *Ident_final;
   mutable IdentifierInfo *Ident_GNU_final;
   mutable IdentifierInfo *Ident_override;
+  mutable IdentifierInfo *Ident_reloc;
   mutable IdentifierInfo *Ident_trivially_relocatable_if_eligible;
   mutable IdentifierInfo *Ident_replaceable_if_eligible;
 
@@ -5017,6 +5018,14 @@ private:
   /// whether the parens contain an expression or a type-id.
   /// Returns true for a type-id and false for an expression.
   bool isTypeIdInParens(bool &isAmbiguous) {
+    if (getLangOpts().CPlusPlus && Tok.is(tok::identifier)) {
+      if (!Ident_reloc)
+        Ident_reloc = &PP.getIdentifierTable().get("reloc");
+      if (Tok.getIdentifierInfo() == Ident_reloc) {
+        isAmbiguous = false;
+        return false;
+      }
+    }
     if (getLangOpts().CPlusPlus)
       return isCXXTypeId(TentativeCXXTypeIdContext::InParens, isAmbiguous);
     isAmbiguous = false;

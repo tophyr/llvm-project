@@ -2623,6 +2623,11 @@ void StmtPrinter::VisitCXXNoexceptExpr(CXXNoexceptExpr *E) {
   OS << ")";
 }
 
+void StmtPrinter::VisitCXXRelocExpr(CXXRelocExpr *E) {
+  OS << "reloc ";
+  PrintExpr(E->getOperand());
+}
+
 void StmtPrinter::VisitPackExpansionExpr(PackExpansionExpr *E) {
   PrintExpr(E->getPattern());
   OS << "...";

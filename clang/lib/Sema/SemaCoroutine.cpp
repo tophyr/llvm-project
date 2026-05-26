@@ -1013,6 +1013,86 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   return Res;
 }
 
+ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
+  if (DiagnoseUnexpandedParameterPack(E))
+    return ExprError();
+
+  if (E->isTypeDependent() || E->isValueDependent())
+    return new (Context) CXXRelocExpr(Context.DependentTy, E, Loc);
+
+  auto GetRelocReferenceType = [](Expr *Operand) -> QualType {
+    Operand = Operand->IgnoreParens();
+
+    if (const auto *DRE = dyn_cast<DeclRefExpr>(Operand)) {
+      if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl())) {
+        if (const auto *RT = VD->getType()->getAs<ReferenceType>())
+          return VD->getType();
+      }
+    }
+
+    if (const auto *ME = dyn_cast<MemberExpr>(Operand)) {
+      if (const auto *VD = dyn_cast<ValueDecl>(ME->getMemberDecl())) {
+        if (const auto *RT = VD->getType()->getAs<ReferenceType>())
+          return VD->getType();
+      }
+    }
+
+    return QualType();
+  };
+
+  QualType Ty = E->getType();
+  if (Ty.isNull() || Ty->isVoidType() || Ty->isFunctionType()) {
+    Diag(Loc, diag::err_reloc_operand_not_glvalue) << E->getSourceRange();
+    return ExprError();
+  }
+
+  Expr::Classification VC = E->Classify(Context);
+  if (VC.isPRValue())
+    return new (Context) CXXRelocExpr(Ty, E, Loc);
+
+  if (!VC.isGLValue()) {
+    Diag(Loc, diag::err_reloc_operand_not_glvalue) << E->getSourceRange();
+    return ExprError();
+  }
+
+  Expr *Operand = E->IgnoreParens();
+  if (QualType RefTy = GetRelocReferenceType(Operand); !RefTy.isNull()) {
+    TypeSourceInfo *TSI = Context.getTrivialTypeSourceInfo(RefTy, Loc);
+    return BuildCXXNamedCast(Loc, tok::kw_static_cast, TSI, E,
+                             SourceRange(Loc, Loc),
+                             SourceRange(Loc, E->getEndLoc()));
+  }
+
+  if (isa<MemberExpr>(Operand)) {
+    Diag(Loc, diag::err_reloc_operand_not_complete_object)
+        << E->getSourceRange();
+    return ExprError();
+  }
+
+  const auto *DRE = dyn_cast<DeclRefExpr>(Operand);
+  if (DRE && DRE->refersToEnclosingVariableOrCapture()) {
+    Diag(Loc, diag::err_reloc_operand_capture) << E->getSourceRange();
+    return ExprError();
+  }
+
+  if (const auto *BD = DRE ? dyn_cast<BindingDecl>(DRE->getDecl()) : nullptr) {
+    Diag(Loc, diag::err_reloc_operand_binding) << E->getSourceRange();
+    return ExprError();
+  }
+
+  const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+  if (VD && VD->isInitCapture()) {
+    Diag(Loc, diag::err_reloc_operand_capture) << E->getSourceRange();
+    return ExprError();
+  }
+  if (!VD || !VD->hasLocalStorage()) {
+    Diag(Loc, diag::err_reloc_operand_not_local) << E->getSourceRange();
+    return ExprError();
+  }
+
+  return new (Context) CXXRelocExpr(Ty, E, Loc);
+}
+
 StmtResult Sema::ActOnCoreturnStmt(Scope *S, SourceLocation Loc, Expr *E) {
   if (!ActOnCoroutineBodyStart(S, Loc, "co_return")) {
     return StmtError();

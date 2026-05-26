@@ -5389,6 +5389,10 @@ recurse:
     mangleExpression(cast<CXXNoexceptExpr>(E)->getOperand());
     break;
 
+  case Expr::CXXRelocExprClass:
+    E = cast<CXXRelocExpr>(E)->getOperand();
+    goto recurse;
+
   case Expr::UnaryExprOrTypeTraitExprClass: {
     // Non-instantiation-dependent traits are an <expr-primary> integer literal.
     const UnaryExprOrTypeTraitExpr *SAE = cast<UnaryExprOrTypeTraitExpr>(E);

@@ -2640,6 +2640,8 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
   case CoyieldExprClass:
     return cast<CoroutineSuspendExpr>(this)->getResumeExpr()->
       isUnusedResultAWarning(WarnE, Loc, R1, R2, Ctx);
+  case CXXRelocExprClass:
+    return false;
   case ChooseExprClass:
     return cast<ChooseExpr>(this)->getChosenSubExpr()->
       isUnusedResultAWarning(WarnE, Loc, R1, R2, Ctx);
@@ -3641,6 +3643,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case ArrayTypeTraitExprClass:
   case ExpressionTraitExprClass:
   case CXXNoexceptExprClass:
+  case CXXRelocExprClass:
   case SizeOfPackExprClass:
   case ObjCStringLiteralClass:
   case ObjCEncodeExprClass:

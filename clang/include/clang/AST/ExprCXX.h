@@ -4281,6 +4281,44 @@ public:
   }
 };
 
+class CXXRelocExpr : public Expr {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  Stmt *Operand;
+  SourceLocation RelocLoc;
+
+public:
+  CXXRelocExpr(QualType Ty, Expr *Operand, SourceLocation RelocLoc)
+      : Expr(CXXRelocExprClass, Ty, VK_PRValue, OK_Ordinary), Operand(Operand),
+        RelocLoc(RelocLoc) {
+    setDependence(Operand->getDependence());
+  }
+
+  CXXRelocExpr(EmptyShell Empty) : Expr(CXXRelocExprClass, Empty) {}
+
+  Expr *getOperand() const { return cast<Expr>(Operand); }
+  void setOperand(Expr *E) { Operand = E; }
+
+  SourceLocation getRelocLoc() const { return RelocLoc; }
+  void setRelocLoc(SourceLocation Loc) { RelocLoc = Loc; }
+
+  SourceLocation getBeginLoc() const { return RelocLoc; }
+  SourceLocation getEndLoc() const { return getOperand()->getEndLoc(); }
+  SourceRange getSourceRange() const {
+    return SourceRange(getBeginLoc(), getEndLoc());
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXRelocExprClass;
+  }
+
+  child_range children() { return child_range(&Operand, &Operand + 1); }
+  const_child_range children() const {
+    return const_child_range(&Operand, &Operand + 1);
+  }
+};
+
 /// Represents a C++11 pack expansion that produces a sequence of
 /// expressions.
 ///

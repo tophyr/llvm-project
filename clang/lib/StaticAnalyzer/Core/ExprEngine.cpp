@@ -1738,6 +1738,7 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::PackIndexingExprClass:
     case Stmt::SubstNonTypeTemplateParmPackExprClass:
     case Stmt::FunctionParmPackExprClass:
+    case Stmt::CXXRelocExprClass:
     case Stmt::CoroutineBodyStmtClass:
     case Stmt::CoawaitExprClass:
     case Stmt::DependentCoawaitExprClass:
