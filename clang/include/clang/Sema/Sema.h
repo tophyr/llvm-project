@@ -5561,6 +5561,10 @@ public:
   /// declared.
   CXXConstructorDecl *DeclareImplicitMoveConstructor(CXXRecordDecl *ClassDecl);
 
+  /// Declare the implicit relocation constructor for the given class.
+  CXXConstructorDecl *DeclareImplicitRelocationConstructor(
+      CXXRecordDecl *ClassDecl);
+
   /// DefineImplicitMoveConstructor - Checks for feasibility of
   /// defining this constructor as the move constructor.
   void DefineImplicitMoveConstructor(SourceLocation CurrentLocation,
@@ -5586,6 +5590,9 @@ public:
   /// \returns The implicitly-declared move assignment operator, or NULL if it
   /// wasn't declared.
   CXXMethodDecl *DeclareImplicitMoveAssignment(CXXRecordDecl *ClassDecl);
+
+  /// Declare the implicit relocation assignment operator for the given class.
+  CXXMethodDecl *DeclareImplicitRelocationAssignment(CXXRecordDecl *ClassDecl);
 
   /// Defines an implicitly-declared move assignment operator.
   void DefineImplicitMoveAssignment(SourceLocation CurrentLocation,

@@ -1089,6 +1089,9 @@ static void DeclareImplicitMemberFunctionsWithName(Sema &S,
         if (S.getLangOpts().CPlusPlus11 &&
             Record->needsImplicitMoveConstructor())
           S.DeclareImplicitMoveConstructor(Class);
+        if (S.getLangOpts().CPlusPlus26 &&
+            Record->needsImplicitRelocationConstructor())
+          S.DeclareImplicitRelocationConstructor(Class);
       }
     break;
 
@@ -1111,6 +1114,12 @@ static void DeclareImplicitMemberFunctionsWithName(Sema &S,
         if (S.getLangOpts().CPlusPlus11 &&
             Record->needsImplicitMoveAssignment())
           S.DeclareImplicitMoveAssignment(Class);
+        if (S.getLangOpts().CPlusPlus26 &&
+            Record->needsImplicitRelocationAssignment()) {
+          if (Record->needsImplicitCopyAssignment())
+            S.DeclareImplicitCopyAssignment(Class);
+          S.DeclareImplicitRelocationAssignment(Class);
+        }
       }
     }
     break;
@@ -3467,6 +3476,11 @@ Sema::LookupSpecialMember(CXXRecordDecl *RD, CXXSpecialMemberKind SM,
           DeclareImplicitMoveConstructor(RD);
         });
       }
+      if (getLangOpts().CPlusPlus26 && RD->needsImplicitRelocationConstructor()) {
+        runWithSufficientStackSpace(RD->getLocation(), [&] {
+          DeclareImplicitRelocationConstructor(RD);
+        });
+      }
     } else {
       Name = Context.DeclarationNames.getCXXOperatorName(OO_Equal);
       if (RD->needsImplicitCopyAssignment()) {
@@ -3477,6 +3491,13 @@ Sema::LookupSpecialMember(CXXRecordDecl *RD, CXXSpecialMemberKind SM,
       if (getLangOpts().CPlusPlus11 && RD->needsImplicitMoveAssignment()) {
         runWithSufficientStackSpace(RD->getLocation(), [&] {
           DeclareImplicitMoveAssignment(RD);
+        });
+      }
+      if (getLangOpts().CPlusPlus26 && RD->needsImplicitRelocationAssignment()) {
+        runWithSufficientStackSpace(RD->getLocation(), [&] {
+          if (RD->needsImplicitCopyAssignment())
+            DeclareImplicitCopyAssignment(RD);
+          DeclareImplicitRelocationAssignment(RD);
         });
       }
     }
@@ -3641,6 +3662,9 @@ DeclContext::lookup_result Sema::LookupConstructors(CXXRecordDecl *Class) {
         DeclareImplicitCopyConstructor(Class);
       if (getLangOpts().CPlusPlus11 && Class->needsImplicitMoveConstructor())
         DeclareImplicitMoveConstructor(Class);
+      if (getLangOpts().CPlusPlus26 &&
+          Class->needsImplicitRelocationConstructor())
+        DeclareImplicitRelocationConstructor(Class);
     });
   }
 

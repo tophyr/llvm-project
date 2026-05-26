@@ -2871,6 +2871,8 @@ def err_underlying_type_of_incomplete_enum : Error<
 // C++11 delegating constructors
 def err_delegating_ctor : Error<
   "delegating constructors are permitted only in C++11">;
+def err_delegating_relocation_ctor : Error<
+  "delegating relocation constructors are not supported">;
 def warn_cxx98_compat_delegating_ctor : Warning<
   "delegating constructors are incompatible with C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
@@ -4991,6 +4993,7 @@ def select_ovl_candidate_kind : TextSubstitution<
     "constructor (the implicit default constructor)|"
     "constructor (the implicit copy constructor)|"
     "constructor (the implicit move constructor)|"
+    "constructor (the implicit relocation constructor)|"
     "function (the implicit copy assignment operator)|"
     "function (the implicit move assignment operator)|"
     "function (the implicit 'operator==' for this 'operator<=>)'|"
@@ -7980,6 +7983,12 @@ def err_reloc_operand_binding : Error<
   "'reloc' operand cannot name a structured binding">;
 def err_reloc_operand_capture : Error<
   "'reloc' operand cannot name a lambda capture">;
+def err_defaulted_reloc_ctor_param_type : Error<
+  "an explicitly-defaulted relocation constructor must have parameter type %0">;
+def err_defaulted_reloc_assign_param_type : Error<
+  "an explicitly-defaulted decomposing relocation assignment operator must have parameter type %0">;
+def err_defaulted_nondecomposing_reloc_assign : Error<
+  "only decomposing relocation assignment operators may be defaulted">;
 def err_explicit_object_parameter_mutable: Error<
   "a lambda with an explicit object parameter cannot be mutable">;
 def err_invalid_explicit_object_type_in_lambda: Error<

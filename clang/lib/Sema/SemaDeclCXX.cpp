@@ -4652,6 +4652,10 @@ Sema::BuildDelegatingInitializer(TypeSourceInfo *TInfo, Expr *Init,
   if (!LangOpts.CPlusPlus11)
     return Diag(NameLoc, diag::err_delegating_ctor)
            << TInfo->getTypeLoc().getSourceRange();
+  if (auto *Ctor = dyn_cast<CXXConstructorDecl>(CurContext);
+      Ctor && Ctor->isRelocationConstructor())
+    return Diag(NameLoc, diag::err_delegating_relocation_ctor)
+           << TInfo->getTypeLoc().getSourceRange();
   Diag(NameLoc, diag::warn_cxx98_compat_delegating_ctor);
 
   bool InitList = true;
@@ -4868,6 +4872,7 @@ enum ImplicitInitializerKind {
   IIK_Default,
   IIK_Copy,
   IIK_Move,
+  IIK_Reloc,
   IIK_Inherit
 };
 
@@ -4894,7 +4899,9 @@ BuildImplicitBaseInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
   }
 
   case IIK_Move:
-  case IIK_Copy: {
+  case IIK_Copy:
+  case IIK_Reloc: {
+    bool Relocating = ImplicitInitKind == IIK_Reloc;
     bool Moving = ImplicitInitKind == IIK_Move;
     ParmVarDecl *Param = Constructor->getParamDecl(0);
     QualType ParamType = Param->getType().getNonReferenceType();
@@ -4922,6 +4929,15 @@ BuildImplicitBaseInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
                                             CK_UncheckedDerivedToBase,
                                             Moving ? VK_XValue : VK_LValue,
                                             &BasePath).get();
+
+    if (Relocating && !BaseSpec->isVirtual()) {
+      CopyCtorArg =
+          SemaRef.ActOnRelocExpr(nullptr, Constructor->getLocation(),
+                                 CopyCtorArg)
+              .getAs<Expr>();
+      if (!CopyCtorArg)
+        return true;
+    }
 
     InitializationKind InitKind
       = InitializationKind::CreateDirect(Constructor->getLocation(),
@@ -4964,7 +4980,9 @@ BuildImplicitMemberInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
 
   SourceLocation Loc = Constructor->getLocation();
 
-  if (ImplicitInitKind == IIK_Copy || ImplicitInitKind == IIK_Move) {
+  if (ImplicitInitKind == IIK_Copy || ImplicitInitKind == IIK_Move ||
+      ImplicitInitKind == IIK_Reloc) {
+    bool Relocating = ImplicitInitKind == IIK_Reloc;
     bool Moving = ImplicitInitKind == IIK_Move;
     ParmVarDecl *Param = Constructor->getParamDecl(0);
     QualType ParamType = Param->getType().getNonReferenceType();
@@ -5004,10 +5022,16 @@ BuildImplicitMemberInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
     if (CtorArg.isInvalid())
       return true;
 
+    if (Relocating) {
+      CtorArg = SemaRef.ActOnRelocExpr(nullptr, Loc, CtorArg.get());
+      if (CtorArg.isInvalid())
+        return true;
+    }
+
     // C++11 [class.copy]p15:
     //   - if a member m has rvalue reference type T&&, it is direct-initialized
     //     with static_cast<T&&>(x.m);
-    if (RefersToRValueRef(CtorArg.get())) {
+    if (!Relocating && RefersToRValueRef(CtorArg.get())) {
       CtorArg = CastForMoving(SemaRef, CtorArg.get());
     }
 
@@ -5131,6 +5155,8 @@ struct BaseAndFieldInfo {
       IIK = IIK_Copy;
     else if (Generated && Ctor->isMoveConstructor())
       IIK = IIK_Move;
+    else if (Generated && Ctor->isRelocationConstructor())
+      IIK = IIK_Reloc;
     else
       IIK = IIK_Default;
   }
@@ -5139,6 +5165,7 @@ struct BaseAndFieldInfo {
     switch (IIK) {
     case IIK_Copy:
     case IIK_Move:
+    case IIK_Reloc:
       return true;
 
     case IIK_Default:
@@ -6727,12 +6754,19 @@ Sema::getDefaultedFunctionKind(const FunctionDecl *FD) {
 
       if (Ctor->isMoveConstructor())
         return CXXSpecialMemberKind::MoveConstructor;
+
+      if (Ctor->isRelocationConstructor())
+        return CXXSpecialMemberKind::MoveConstructor;
     }
 
     if (MD->isCopyAssignmentOperator())
       return CXXSpecialMemberKind::CopyAssignment;
 
     if (MD->isMoveAssignmentOperator())
+      return CXXSpecialMemberKind::MoveAssignment;
+
+    if (MD->isRelocationAssignmentOperator() &&
+        MD->getNonObjectParameter(0)->getIdentifier())
       return CXXSpecialMemberKind::MoveAssignment;
 
     if (isa<CXXDestructorDecl>(FD))
@@ -7381,6 +7415,49 @@ lookupCallFromSpecialMember(Sema &S, CXXRecordDecl *Class,
                                LHSQuals & Qualifiers::Volatile);
 }
 
+static Sema::SpecialMemberOverloadResult
+lookupDeclaredRelocationSpecialMember(CXXRecordDecl *Class, bool IsAssignment) {
+  Sema::SpecialMemberOverloadResult Result;
+  CXXMethodDecl *Found = nullptr;
+
+  auto Consider = [&](CXXMethodDecl *Candidate) -> bool {
+    if (!Candidate)
+      return false;
+    if (IsAssignment ? !Candidate->isRelocationAssignmentOperator()
+                     : !cast<CXXConstructorDecl>(Candidate)
+                            ->isRelocationConstructor())
+      return false;
+
+    Candidate = Candidate->getCanonicalDecl();
+    if (!Found) {
+      Found = Candidate;
+      return false;
+    }
+
+    if (Found == Candidate)
+      return false;
+
+    Result.setMethod(Found);
+    Result.setKind(Sema::SpecialMemberOverloadResult::Ambiguous);
+    return true;
+  };
+
+  if (IsAssignment) {
+    for (auto *Method : Class->methods())
+      if (Consider(Method))
+        return Result;
+  } else {
+    for (auto *Ctor : Class->ctors())
+      if (Consider(Ctor))
+        return Result;
+  }
+
+  if (!Found)
+    return Result;
+
+  return Sema::SpecialMemberOverloadResult(Found);
+}
+
 class Sema::InheritedConstructorInfo {
   Sema &S;
   SourceLocation UseLoc;
@@ -7774,6 +7851,12 @@ bool Sema::CheckExplicitlyDefaultedSpecialMember(CXXMethodDecl *MD,
     CanHaveConstParam = RD->implicitCopyConstructorHasConstParam();
   else if (CSM == CXXSpecialMemberKind::CopyAssignment)
     CanHaveConstParam = RD->implicitCopyAssignmentHasConstParam();
+  bool IsExplicitlyDefaultedRelocationCtor =
+      isa<CXXConstructorDecl>(MD) &&
+      cast<CXXConstructorDecl>(MD)->isRelocationConstructor();
+  bool IsExplicitlyDefaultedRelocationAssign =
+      MD->isRelocationAssignmentOperator() &&
+      MD->getNonObjectParameter(0)->getIdentifier() != nullptr;
 
   QualType ReturnType = Context.VoidTy;
   if (CSM == CXXSpecialMemberKind::CopyAssignment ||
@@ -7872,12 +7955,31 @@ bool Sema::CheckExplicitlyDefaultedSpecialMember(CXXMethodDecl *MD,
       }
     }
   } else if (ExpectedParams) {
-    // A copy assignment operator can take its argument by value, but a
-    // defaulted one cannot.
-    assert(CSM == CXXSpecialMemberKind::CopyAssignment &&
-           "unexpected non-ref argument");
-    Diag(MD->getLocation(), diag::err_defaulted_copy_assign_not_ref);
-    HadError = true;
+    if (IsExplicitlyDefaultedRelocationCtor ||
+        IsExplicitlyDefaultedRelocationAssign) {
+      QualType ExpectedType = Context.getTypeDeclType(RD);
+      ExpectedType = Context.getElaboratedType(ElaboratedTypeKeyword::None,
+                                               nullptr, ExpectedType, nullptr);
+      if (!Context.hasSameType(ArgType, ExpectedType)) {
+        if (DeleteOnTypeMismatch)
+          ShouldDeleteForTypeMismatch = true;
+        else {
+          Diag(MD->getLocation(),
+               IsExplicitlyDefaultedRelocationCtor
+                   ? diag::err_defaulted_reloc_ctor_param_type
+                   : diag::err_defaulted_reloc_assign_param_type)
+              << ExpectedType;
+          HadError = true;
+        }
+      }
+    } else {
+      // A copy assignment operator can take its argument by value, but a
+      // defaulted one cannot.
+      assert(CSM == CXXSpecialMemberKind::CopyAssignment &&
+             "unexpected non-ref argument");
+      Diag(MD->getLocation(), diag::err_defaulted_copy_assign_not_ref);
+      HadError = true;
+    }
   }
 
   // C++11 [dcl.fct.def.default]p2:
@@ -9368,7 +9470,36 @@ struct SpecialMemberVisitor {
 
   /// Look up the corresponding special member in the given class.
   Sema::SpecialMemberOverloadResult lookupIn(CXXRecordDecl *Class,
-                                             unsigned Quals, bool IsMutable) {
+                                             unsigned Quals, bool IsMutable,
+                                             bool IsVirtualBase = false) {
+    bool IsRelocationSpecial =
+        (CSM == CXXSpecialMemberKind::MoveConstructor &&
+         isa<CXXConstructorDecl>(MD) &&
+         cast<CXXConstructorDecl>(MD)->isRelocationConstructor()) ||
+        (CSM == CXXSpecialMemberKind::MoveAssignment &&
+         MD->isRelocationAssignmentOperator());
+    if (IsRelocationSpecial) {
+      bool IsAssignment = CSM == CXXSpecialMemberKind::MoveAssignment;
+      if (!IsVirtualBase) {
+        Sema::SpecialMemberOverloadResult Reloc =
+            lookupDeclaredRelocationSpecialMember(Class, IsAssignment);
+        if (Reloc.getKind() == Sema::SpecialMemberOverloadResult::Success)
+          return Reloc;
+      }
+
+      Sema::SpecialMemberOverloadResult Move =
+          lookupCallFromSpecialMember(S, Class, CSM, Quals,
+                                      ConstArg && !IsMutable);
+      if (Move.getKind() == Sema::SpecialMemberOverloadResult::Success)
+        return Move;
+
+      return lookupCallFromSpecialMember(
+          S, Class,
+          IsAssignment ? CXXSpecialMemberKind::CopyAssignment
+                       : CXXSpecialMemberKind::CopyConstructor,
+          Quals, /*ConstRHS=*/false);
+    }
+
     return lookupCallFromSpecialMember(S, Class, CSM, Quals,
                                        ConstArg && !IsMutable);
   }
@@ -10147,10 +10278,72 @@ static bool checkTrivialSubobjectCall(Sema &S, SourceLocation SubobjLoc,
                                       QualType SubType, bool ConstRHS,
                                       CXXSpecialMemberKind CSM,
                                       TrivialSubobjectKind Kind,
+                                      const CXXMethodDecl *ParentSM,
+                                      bool IsVirtualBase,
                                       TrivialABIHandling TAH, bool Diagnose) {
   CXXRecordDecl *SubRD = SubType->getAsCXXRecordDecl();
   if (!SubRD)
     return true;
+
+  auto IsRelocationSpecial = [&](const CXXMethodDecl *MD) {
+    if (!MD)
+      return false;
+    if (CSM == CXXSpecialMemberKind::MoveConstructor)
+      return isa<CXXConstructorDecl>(MD) &&
+             cast<CXXConstructorDecl>(MD)->isRelocationConstructor();
+    if (CSM == CXXSpecialMemberKind::MoveAssignment)
+      return MD->isRelocationAssignmentOperator();
+    return false;
+  };
+
+  if (IsRelocationSpecial(ParentSM)) {
+    auto CheckSelected = [&](Sema::SpecialMemberOverloadResult SMOR,
+                             CXXSpecialMemberKind SelectedCSM,
+                             bool FallbackOnly) -> std::optional<bool> {
+      if (SMOR.getKind() == Sema::SpecialMemberOverloadResult::Ambiguous) {
+        if (Diagnose)
+          return false;
+        return true;
+      }
+
+      CXXMethodDecl *Method = SMOR.getMethod();
+      if (!Method || Method->isDeleted())
+        return FallbackOnly ? std::optional<bool>() : std::optional<bool>(false);
+
+      if (TAH == TrivialABIHandling::ConsiderTrivialABI &&
+          (SelectedCSM == CXXSpecialMemberKind::CopyConstructor ||
+           SelectedCSM == CXXSpecialMemberKind::MoveConstructor))
+        return Method->isTrivialForCall();
+      return Method->isTrivial();
+    };
+
+    bool IsAssignment = CSM == CXXSpecialMemberKind::MoveAssignment;
+    if (!IsVirtualBase) {
+      Sema::SpecialMemberOverloadResult Reloc =
+          lookupDeclaredRelocationSpecialMember(SubRD, IsAssignment);
+      if (auto Result = CheckSelected(Reloc, CSM, /*FallbackOnly=*/true))
+        return *Result;
+    }
+
+    Sema::SpecialMemberOverloadResult Move = lookupCallFromSpecialMember(
+        S, SubRD, CSM, SubType.getCVRQualifiers(), ConstRHS);
+    if (auto Result = CheckSelected(Move, CSM, /*FallbackOnly=*/true))
+      return *Result;
+
+    Sema::SpecialMemberOverloadResult Copy = lookupCallFromSpecialMember(
+        S, SubRD,
+        IsAssignment ? CXXSpecialMemberKind::CopyAssignment
+                     : CXXSpecialMemberKind::CopyConstructor,
+        SubType.getCVRQualifiers(), /*ConstRHS=*/false);
+    if (auto Result = CheckSelected(
+            Copy,
+            IsAssignment ? CXXSpecialMemberKind::CopyAssignment
+                         : CXXSpecialMemberKind::CopyConstructor,
+            /*FallbackOnly=*/false))
+      return *Result;
+
+    return false;
+  }
 
   CXXMethodDecl *Selected;
   if (findTrivialSpecialMember(S, SubRD, CSM, SubType.getCVRQualifiers(),
@@ -10196,6 +10389,7 @@ static bool checkTrivialSubobjectCall(Sema &S, SourceLocation SubobjLoc,
 /// trivial.
 static bool checkTrivialClassMembers(Sema &S, CXXRecordDecl *RD,
                                      CXXSpecialMemberKind CSM, bool ConstArg,
+                                     const CXXMethodDecl *ParentSM,
                                      TrivialABIHandling TAH, bool Diagnose) {
   for (const auto *FI : RD->fields()) {
     if (FI->isInvalidDecl() || FI->isUnnamedBitField())
@@ -10206,7 +10400,7 @@ static bool checkTrivialClassMembers(Sema &S, CXXRecordDecl *RD,
     // Pretend anonymous struct or union members are members of this class.
     if (FI->isAnonymousStructOrUnion()) {
       if (!checkTrivialClassMembers(S, FieldType->getAsCXXRecordDecl(),
-                                    CSM, ConstArg, TAH, Diagnose))
+                                    CSM, ConstArg, ParentSM, TAH, Diagnose))
         return false;
       continue;
     }
@@ -10236,7 +10430,8 @@ static bool checkTrivialClassMembers(Sema &S, CXXRecordDecl *RD,
 
     bool ConstRHS = ConstArg && !FI->isMutable();
     if (!checkTrivialSubobjectCall(S, FI->getLocation(), FieldType, ConstRHS,
-                                   CSM, TSK_Field, TAH, Diagnose))
+                                   CSM, TSK_Field, ParentSM,
+                                   /*IsVirtualBase=*/false, TAH, Diagnose))
       return false;
   }
 
@@ -10250,7 +10445,8 @@ void Sema::DiagnoseNontrivial(const CXXRecordDecl *RD,
   bool ConstArg = (CSM == CXXSpecialMemberKind::CopyConstructor ||
                    CSM == CXXSpecialMemberKind::CopyAssignment);
   checkTrivialSubobjectCall(*this, RD->getLocation(), Ty, ConstArg, CSM,
-                            TSK_CompleteObject,
+                            TSK_CompleteObject, /*ParentSM=*/nullptr,
+                            /*IsVirtualBase=*/false,
                             TrivialABIHandling::IgnoreTrivialABI,
                             /*Diagnose*/ true);
 }
@@ -10263,6 +10459,7 @@ bool Sema::SpecialMemberIsTrivial(CXXMethodDecl *MD, CXXSpecialMemberKind CSM,
   CXXRecordDecl *RD = MD->getParent();
 
   bool ConstArg = false;
+  bool IsRelocationSpecial = false;
 
   // C++11 [class.copy]p12, p25: [DR1593]
   //   A [special member] is trivial if [...] its parameter-type-list is
@@ -10305,10 +10502,30 @@ bool Sema::SpecialMemberIsTrivial(CXXMethodDecl *MD, CXXSpecialMemberKind CSM,
 
   case CXXSpecialMemberKind::MoveConstructor:
   case CXXSpecialMemberKind::MoveAssignment: {
-    // Trivial move operations always have non-cv-qualified parameters.
+    IsRelocationSpecial =
+        (CSM == CXXSpecialMemberKind::MoveConstructor &&
+         isa<CXXConstructorDecl>(MD) &&
+         cast<CXXConstructorDecl>(MD)->isRelocationConstructor()) ||
+        (CSM == CXXSpecialMemberKind::MoveAssignment &&
+         MD->isRelocationAssignmentOperator());
+
     const ParmVarDecl *Param0 = MD->getNonObjectParameter(0);
+    if (IsRelocationSpecial) {
+      QualType ParamTy = Param0->getType();
+      if (ParamTy.getNonReferenceType().getCVRQualifiers() ||
+          !Context.hasSameUnqualifiedType(ParamTy,
+                                         Context.getRecordType(RD))) {
+        if (Diagnose)
+          Diag(Param0->getLocation(), diag::note_nontrivial_param_type)
+              << Param0->getSourceRange() << Param0->getType()
+              << Context.getRecordType(RD);
+        return false;
+      }
+      break;
+    }
+
     const RValueReferenceType *RT =
-      Param0->getType()->getAs<RValueReferenceType>();
+        Param0->getType()->getAs<RValueReferenceType>();
     if (!RT || RT->getPointeeType().getCVRQualifiers()) {
       if (Diagnose)
         Diag(Param0->getLocation(), diag::note_nontrivial_param_type)
@@ -10347,7 +10564,8 @@ bool Sema::SpecialMemberIsTrivial(CXXMethodDecl *MD, CXXSpecialMemberKind CSM,
   //       destructors]
   for (const auto &BI : RD->bases())
     if (!checkTrivialSubobjectCall(*this, BI.getBeginLoc(), BI.getType(),
-                                   ConstArg, CSM, TSK_BaseClass, TAH, Diagnose))
+                                   ConstArg, CSM, TSK_BaseClass, MD,
+                                   BI.isVirtual(), TAH, Diagnose))
       return false;
 
   // C++11 [class.ctor]p5, C++11 [class.dtor]p5:
@@ -10362,7 +10580,7 @@ bool Sema::SpecialMemberIsTrivial(CXXMethodDecl *MD, CXXSpecialMemberKind CSM,
   //    -- for all of the non-static data members of its class that are of class
   //       type (or array thereof), each such class has a trivial [default
   //       constructor or destructor]
-  if (!checkTrivialClassMembers(*this, RD, CSM, ConstArg, TAH, Diagnose))
+  if (!checkTrivialClassMembers(*this, RD, CSM, ConstArg, MD, TAH, Diagnose))
     return false;
 
   // C++11 [class.dtor]p5:
@@ -13952,7 +14170,10 @@ void SpecialMemberExceptionSpecInfo::visitClassSubobject(CXXRecordDecl *Class,
                                                          unsigned Quals) {
   FieldDecl *Field = Subobj.dyn_cast<FieldDecl*>();
   bool IsMutable = Field && Field->isMutable();
-  visitSubobjectCall(Subobj, lookupIn(Class, Quals, IsMutable));
+  auto *Base = dyn_cast<CXXBaseSpecifier *>(Subobj);
+  visitSubobjectCall(Subobj,
+                     lookupIn(Class, Quals, IsMutable,
+                              Base && Base->isVirtual()));
 }
 
 void SpecialMemberExceptionSpecInfo::visitSubobjectCall(
@@ -14705,6 +14926,18 @@ public:
   }
 
   MoveCastBuilder(const ExprBuilder &Builder) : Builder(Builder) {}
+};
+
+class RelocBuilder : public ExprBuilder {
+  const ExprBuilder &Builder;
+
+public:
+  Expr *build(Sema &S, SourceLocation Loc) const override {
+    return assertNotNull(S.ActOnRelocExpr(nullptr, Loc, Builder.build(S, Loc))
+                             .getAs<Expr>());
+  }
+
+  RelocBuilder(const ExprBuilder &Builder) : Builder(Builder) {}
 };
 
 class LvalueConvBuilder: public ExprBuilder {
@@ -15468,6 +15701,74 @@ CXXMethodDecl *Sema::DeclareImplicitMoveAssignment(CXXRecordDecl *ClassDecl) {
   return MoveAssignment;
 }
 
+CXXMethodDecl *Sema::DeclareImplicitRelocationAssignment(
+    CXXRecordDecl *ClassDecl) {
+  DeclaringSpecialMember DSM(*this, ClassDecl,
+                             CXXSpecialMemberKind::MoveAssignment);
+  if (DSM.isAlreadyBeingDeclared())
+    return nullptr;
+
+  QualType ArgType = Context.getTypeDeclType(ClassDecl);
+  ArgType = Context.getElaboratedType(ElaboratedTypeKeyword::None, nullptr,
+                                        ArgType, nullptr);
+  LangAS AS = getDefaultCXXMethodAddrSpace();
+  if (AS != LangAS::Default)
+    ArgType = Context.getAddrSpaceQualType(ArgType, AS);
+  QualType RetType = Context.getLValueReferenceType(ArgType);
+
+  bool Constexpr = defaultedSpecialMemberIsConstexpr(
+      *this, ClassDecl, CXXSpecialMemberKind::MoveAssignment, false);
+
+  DeclarationName Name = Context.DeclarationNames.getCXXOperatorName(OO_Equal);
+  SourceLocation ClassLoc = ClassDecl->getLocation();
+  DeclarationNameInfo NameInfo(Name, ClassLoc);
+  CXXMethodDecl *RelocationAssignment = CXXMethodDecl::Create(
+      Context, ClassDecl, ClassLoc, NameInfo, QualType(),
+      /*TInfo=*/nullptr, /*StorageClass=*/SC_None,
+      getCurFPFeatures().isFPConstrained(),
+      /*isInline=*/true,
+      Constexpr ? ConstexprSpecKind::Constexpr
+                : ConstexprSpecKind::Unspecified,
+      SourceLocation());
+  RelocationAssignment->setAccess(AS_public);
+  RelocationAssignment->setDefaulted();
+  RelocationAssignment->setImplicit();
+
+  setupImplicitSpecialMemberType(RelocationAssignment, RetType, ArgType);
+
+  if (getLangOpts().CUDA)
+    CUDA().inferTargetForImplicitSpecialMember(
+        ClassDecl, CXXSpecialMemberKind::MoveAssignment, RelocationAssignment,
+        /*ConstRHS=*/false,
+        /*Diagnose=*/false);
+
+  IdentifierInfo *SrcII = &Context.Idents.get("src");
+  ParmVarDecl *FromParam = ParmVarDecl::Create(
+      Context, RelocationAssignment, ClassLoc, ClassLoc, SrcII, ArgType,
+      /*TInfo=*/nullptr, SC_None, nullptr);
+  FromParam->setIsRelocParameter(true);
+  RelocationAssignment->setParams(FromParam);
+
+  RelocationAssignment->setTrivial(
+      ClassDecl->needsOverloadResolutionForMoveAssignment()
+          ? SpecialMemberIsTrivial(RelocationAssignment,
+                                   CXXSpecialMemberKind::MoveAssignment)
+          : ClassDecl->hasTrivialMoveAssignment());
+
+  Scope *Scope = getScopeForContext(ClassDecl);
+  CheckImplicitSpecialMemberDeclaration(Scope, RelocationAssignment);
+
+  if (ShouldDeleteSpecialMember(RelocationAssignment,
+                                CXXSpecialMemberKind::MoveAssignment))
+    SetDeclDeleted(RelocationAssignment, ClassLoc);
+
+  if (Scope)
+    PushOnScopeChains(RelocationAssignment, Scope, false);
+  ClassDecl->addDecl(RelocationAssignment);
+
+  return RelocationAssignment;
+}
+
 /// Check if we're implicitly defining a move assignment operator for a class
 /// with virtual bases. Such a move assignment might move-assign the virtual
 /// base multiple times.
@@ -15595,8 +15896,12 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
 
   // The parameter for the "other" object, which we are move from.
   ParmVarDecl *Other = MoveAssignOperator->getNonObjectParameter(0);
-  QualType OtherRefType =
-      Other->getType()->castAs<RValueReferenceType>()->getPointeeType();
+  bool IsRelocationAssign = MoveAssignOperator->isRelocationAssignmentOperator();
+  QualType OtherType = IsRelocationAssign
+                           ? Other->getType()
+                           : Other->getType()
+                                 ->castAs<RValueReferenceType>()
+                                 ->getPointeeType();
 
   // Our location for everything implicitly-generated.
   SourceLocation Loc = MoveAssignOperator->getEndLoc().isValid()
@@ -15604,9 +15909,10 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
                            : MoveAssignOperator->getLocation();
 
   // Builds a reference to the "other" object.
-  RefBuilder OtherRef(Other, OtherRefType);
-  // Cast to rvalue.
-  MoveCastBuilder MoveOther(OtherRef);
+  RefBuilder OtherRef(Other, OtherType);
+  std::optional<MoveCastBuilder> MoveOther;
+  if (!IsRelocationAssign)
+    MoveOther.emplace(OtherRef);
 
   // Builds the function object parameter.
   std::optional<ThisBuilder> This;
@@ -15652,7 +15958,13 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
 
     // Construct the "from" expression, which is an implicit cast to the
     // appropriately-qualified base type.
-    CastBuilder From(OtherRef, BaseType, VK_XValue, BasePath);
+    CastBuilder From(
+        OtherRef, BaseType,
+        IsRelocationAssign && !Base.isVirtual() ? VK_LValue : VK_XValue,
+        BasePath);
+    std::optional<RelocBuilder> RelocFrom;
+    if (IsRelocationAssign && !Base.isVirtual())
+      RelocFrom.emplace(From);
 
     // Implicitly cast "this" to the appropriately-qualified base type.
     // Dereference "this".
@@ -15663,10 +15975,12 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
         VK_LValue, BasePath);
 
     // Build the move.
-    StmtResult Move = buildSingleCopyAssign(*this, Loc, BaseType,
-                                            To, From,
-                                            /*CopyingBaseSubobject=*/true,
-                                            /*Copying=*/false);
+    StmtResult Move = buildSingleCopyAssign(
+        *this, Loc, BaseType, To,
+        RelocFrom ? static_cast<const ExprBuilder &>(*RelocFrom)
+                  : static_cast<const ExprBuilder &>(From),
+        /*CopyingBaseSubobject=*/true,
+        /*Copying=*/false);
     if (Move.isInvalid()) {
       MoveAssignOperator->setInvalidDecl();
       return;
@@ -15723,19 +16037,27 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
                               LookupMemberName);
     MemberLookup.addDecl(Field);
     MemberLookup.resolveKind();
-    MemberBuilder From(MoveOther, OtherRefType,
-                       /*IsArrow=*/false, MemberLookup);
+    MemberBuilder From(OtherRef, OtherType, /*IsArrow=*/false, MemberLookup);
+    std::optional<RelocBuilder> RelocFrom;
+    if (IsRelocationAssign)
+      RelocFrom.emplace(From);
+    std::optional<MemberBuilder> MoveFrom;
+    if (!IsRelocationAssign)
+      MoveFrom.emplace(*MoveOther, OtherType, /*IsArrow=*/false, MemberLookup);
     MemberBuilder To(ObjectParameter, ObjectType, IsArrow, MemberLookup);
 
-    assert(!From.build(*this, Loc)->isLValue() && // could be xvalue or prvalue
-        "Member reference with rvalue base must be rvalue except for reference "
-        "members, which aren't allowed for move assignment.");
+    if (!IsRelocationAssign)
+      assert(!MoveFrom->build(*this, Loc)->isLValue() &&
+             "Member reference with rvalue base must be rvalue except for "
+             "reference members, which aren't allowed for move assignment.");
 
     // Build the move of this field.
-    StmtResult Move = buildSingleCopyAssign(*this, Loc, FieldType,
-                                            To, From,
-                                            /*CopyingBaseSubobject=*/false,
-                                            /*Copying=*/false);
+    StmtResult Move = buildSingleCopyAssign(
+        *this, Loc, FieldType, To,
+        IsRelocationAssign ? static_cast<const ExprBuilder &>(*RelocFrom)
+                           : static_cast<const ExprBuilder &>(*MoveFrom),
+        /*CopyingBaseSubobject=*/false,
+        /*Copying=*/false);
     if (Move.isInvalid()) {
       MoveAssignOperator->setInvalidDecl();
       return;
@@ -16020,10 +16342,87 @@ CXXConstructorDecl *Sema::DeclareImplicitMoveConstructor(
   return MoveConstructor;
 }
 
+CXXConstructorDecl *Sema::DeclareImplicitRelocationConstructor(
+    CXXRecordDecl *ClassDecl) {
+  DeclaringSpecialMember DSM(*this, ClassDecl,
+                             CXXSpecialMemberKind::MoveConstructor);
+  if (DSM.isAlreadyBeingDeclared())
+    return nullptr;
+
+  QualType ClassType = Context.getTypeDeclType(ClassDecl);
+  QualType ArgType = Context.getElaboratedType(ElaboratedTypeKeyword::None,
+                                               nullptr, ClassType, nullptr);
+  LangAS AS = getDefaultCXXMethodAddrSpace();
+  if (AS != LangAS::Default)
+    ArgType = Context.getAddrSpaceQualType(ArgType, AS);
+
+  bool Constexpr = defaultedSpecialMemberIsConstexpr(
+      *this, ClassDecl, CXXSpecialMemberKind::MoveConstructor, false);
+
+  DeclarationName Name =
+      Context.DeclarationNames.getCXXConstructorName(
+          Context.getCanonicalType(ClassType));
+  SourceLocation ClassLoc = ClassDecl->getLocation();
+  DeclarationNameInfo NameInfo(Name, ClassLoc);
+
+  CXXConstructorDecl *RelocationConstructor = CXXConstructorDecl::Create(
+      Context, ClassDecl, ClassLoc, NameInfo, QualType(), /*TInfo=*/nullptr,
+      ExplicitSpecifier(), getCurFPFeatures().isFPConstrained(),
+      /*isInline=*/true, /*isImplicitlyDeclared=*/true,
+      Constexpr ? ConstexprSpecKind::Constexpr
+                : ConstexprSpecKind::Unspecified);
+  RelocationConstructor->setAccess(AS_public);
+  RelocationConstructor->setDefaulted();
+
+  setupImplicitSpecialMemberType(RelocationConstructor, Context.VoidTy, ArgType);
+
+  if (getLangOpts().CUDA)
+    CUDA().inferTargetForImplicitSpecialMember(
+        ClassDecl, CXXSpecialMemberKind::MoveConstructor,
+        RelocationConstructor,
+        /*ConstRHS=*/false,
+        /*Diagnose=*/false);
+
+  ParmVarDecl *FromParam = ParmVarDecl::Create(
+      Context, RelocationConstructor, ClassLoc, ClassLoc,
+      /*IdentifierInfo=*/nullptr, ArgType, /*TInfo=*/nullptr, SC_None,
+      nullptr);
+  FromParam->setIsRelocParameter(true);
+  RelocationConstructor->setParams(FromParam);
+
+  RelocationConstructor->setTrivial(
+      ClassDecl->needsOverloadResolutionForMoveConstructor()
+          ? SpecialMemberIsTrivial(RelocationConstructor,
+                                   CXXSpecialMemberKind::MoveConstructor)
+          : ClassDecl->hasTrivialMoveConstructor());
+
+  RelocationConstructor->setTrivialForCall(
+      ClassDecl->hasAttr<TrivialABIAttr>() ||
+      (ClassDecl->needsOverloadResolutionForMoveConstructor()
+           ? SpecialMemberIsTrivial(RelocationConstructor,
+                                    CXXSpecialMemberKind::MoveConstructor,
+                                    TrivialABIHandling::ConsiderTrivialABI)
+           : ClassDecl->hasTrivialMoveConstructorForCall()));
+
+  Scope *Scope = getScopeForContext(ClassDecl);
+  CheckImplicitSpecialMemberDeclaration(Scope, RelocationConstructor);
+
+  if (ShouldDeleteSpecialMember(RelocationConstructor,
+                                CXXSpecialMemberKind::MoveConstructor))
+    SetDeclDeleted(RelocationConstructor, ClassLoc);
+
+  if (Scope)
+    PushOnScopeChains(RelocationConstructor, Scope, false);
+  ClassDecl->addDecl(RelocationConstructor);
+
+  return RelocationConstructor;
+}
+
 void Sema::DefineImplicitMoveConstructor(SourceLocation CurrentLocation,
                                          CXXConstructorDecl *MoveConstructor) {
   assert((MoveConstructor->isDefaulted() &&
-          MoveConstructor->isMoveConstructor() &&
+          (MoveConstructor->isMoveConstructor() ||
+           MoveConstructor->isRelocationConstructor()) &&
           !MoveConstructor->doesThisDeclarationHaveABody() &&
           !MoveConstructor->isDeleted()) &&
          "DefineImplicitMoveConstructor - call it for implicit move ctor");
@@ -18523,6 +18922,13 @@ void Sema::SetDeclDefaulted(Decl *Dcl, SourceLocation DefaultLoc) {
 
     Diag(DefaultLoc, diag::err_default_special_members)
         << getLangOpts().CPlusPlus20;
+    return;
+  }
+
+  if (auto *MD = dyn_cast<CXXMethodDecl>(FD);
+      MD && MD->isRelocationAssignmentOperator() &&
+      !MD->getNonObjectParameter(0)->getIdentifier()) {
+    Diag(DefaultLoc, diag::err_defaulted_nondecomposing_reloc_assign);
     return;
   }
 

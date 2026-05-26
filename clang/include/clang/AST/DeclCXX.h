@@ -862,6 +862,36 @@ public:
            needsImplicitMoveConstructor();
   }
 
+  /// Determine whether this class has had a relocation constructor declared by
+  /// the user.
+  bool hasUserDeclaredRelocationConstructor() const;
+
+  /// Determine whether this class has had a relocation assignment operator
+  /// declared by the user.
+  bool hasUserDeclaredRelocationAssignment() const;
+
+  /// Determine whether this class has any relocation constructor declared.
+  bool hasDeclaredRelocationConstructor() const;
+
+  /// Determine whether this class has any relocation assignment operator
+  /// declared.
+  bool hasDeclaredRelocationAssignment() const;
+
+  /// Determine whether this class should get an implicit relocation
+  /// constructor.
+  bool needsImplicitRelocationConstructor() const {
+    if (!getLangOpts().CPlusPlus26)
+      return false;
+    if (hasDeclaredRelocationConstructor())
+        return false;
+    return !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveConstructor() &&
+           !hasUserDeclaredMoveAssignment() &&
+           !hasUserDeclaredDestructor() &&
+           !hasUserDeclaredRelocationAssignment();
+  }
+
   /// Set that we attempted to declare an implicit copy
   /// constructor, but overload resolution failed so we deleted it.
   void setImplicitCopyConstructorIsDeleted() {
@@ -995,6 +1025,22 @@ public:
            !hasUserDeclaredCopyAssignment() &&
            !hasUserDeclaredMoveConstructor() &&
            !hasUserDeclaredDestructor() &&
+           (!isLambda() || lambdaIsDefaultConstructibleAndAssignable());
+  }
+
+  /// Determine whether this class should get an implicit relocation
+  /// assignment operator.
+  bool needsImplicitRelocationAssignment() const {
+    if (!getLangOpts().CPlusPlus26)
+      return false;
+    if (hasDeclaredRelocationAssignment())
+        return false;
+    return !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveConstructor() &&
+           !hasUserDeclaredMoveAssignment() &&
+           !hasUserDeclaredDestructor() &&
+           !hasUserDeclaredRelocationConstructor() &&
            (!isLambda() || lambdaIsDefaultConstructibleAndAssignable());
   }
 

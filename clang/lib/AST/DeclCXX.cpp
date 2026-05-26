@@ -1672,6 +1672,35 @@ void CXXRecordDecl::setTrivialForCallFlags(CXXMethodDecl *D) {
     data().DeclaredNonTrivialSpecialMembersForCall |= SMKind;
 }
 
+bool CXXRecordDecl::hasUserDeclaredRelocationConstructor() const {
+  for (const auto *Ctor : ctors())
+    if (!Ctor->isImplicit() && Ctor->isRelocationConstructor())
+      return true;
+  return false;
+}
+
+bool CXXRecordDecl::hasUserDeclaredRelocationAssignment() const {
+  for (const auto *Method : methods())
+    if (!Method->isImplicit() && Method->isRelocationAssignmentOperator())
+      return true;
+  return false;
+}
+
+bool CXXRecordDecl::hasDeclaredRelocationConstructor() const {
+  for (const auto *Ctor : ctors())
+    if (Ctor->isRelocationConstructor())
+      return true;
+  return false;
+}
+
+bool CXXRecordDecl::hasDeclaredRelocationAssignment() const {
+  for (const auto *Method : methods())
+    if (Method->isRelocationAssignmentOperator())
+      return true;
+  return false;
+}
+
+
 bool CXXRecordDecl::isCLike() const {
   if (getTagKind() == TagTypeKind::Class ||
       getTagKind() == TagTypeKind::Interface ||

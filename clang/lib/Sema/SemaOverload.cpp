@@ -58,6 +58,11 @@ static bool functionHasPassObjectSizeParams(const FunctionDecl *FD) {
   });
 }
 
+static bool isRelocGlvalueArgument(Expr *Arg) {
+  const auto *RE = dyn_cast<CXXRelocExpr>(Arg->IgnoreParenImpCasts());
+  return RE && RE->getOperand()->isGLValue();
+}
+
 /// A convenience routine for creating a decayed reference to a function.
 static ExprResult CreateFunctionRefExpr(
     Sema &S, FunctionDecl *Fn, NamedDecl *FoundDecl, const Expr *Base,
@@ -7092,6 +7097,11 @@ void Sema::AddOverloadCandidate(
     // argument doesn't participate in overload resolution.
   }
 
+  if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(Function))
+    if (Ctor->isRelocationConstructor() &&
+        !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+      return;
+
   if (!CandidateSet.isNewCandidate(Function, PO))
     return;
 
@@ -7708,6 +7718,10 @@ void Sema::AddMethodCandidate(
   assert(!isa<CXXConstructorDecl>(Method) &&
          "Use AddOverloadCandidate for constructors");
 
+  if (Method->isRelocationAssignmentOperator() &&
+      !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+    return;
+
   if (!CandidateSet.isNewCandidate(Method, PO))
     return;
 
@@ -8096,6 +8110,18 @@ void Sema::AddTemplateOverloadCandidate(
     OverloadCandidateSet &CandidateSet, bool SuppressUserConversions,
     bool PartialOverloading, bool AllowExplicit, ADLCallKind IsADLCandidate,
     OverloadCandidateParamOrder PO, bool AggregateCandidateDeduction) {
+  if (const auto *Ctor =
+          dyn_cast<CXXConstructorDecl>(FunctionTemplate->getTemplatedDecl()))
+    if (Ctor->isRelocationConstructor() &&
+        !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+      return;
+
+  if (const auto *Method =
+          dyn_cast<CXXMethodDecl>(FunctionTemplate->getTemplatedDecl()))
+    if (Method->isRelocationAssignmentOperator() &&
+        !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+      return;
+
   if (!CandidateSet.isNewCandidate(FunctionTemplate, PO))
     return;
 
@@ -11503,6 +11529,7 @@ enum OverloadCandidateKind {
   oc_implicit_default_constructor,
   oc_implicit_copy_constructor,
   oc_implicit_move_constructor,
+  oc_implicit_relocation_constructor,
   oc_implicit_copy_assignment,
   oc_implicit_move_assignment,
   oc_implicit_equality_comparison,
@@ -11551,6 +11578,9 @@ ClassifyOverloadCandidate(Sema &S, const NamedDecl *Found,
 
       if (Ctor->isDefaultConstructor())
         return oc_implicit_default_constructor;
+
+      if (Ctor->isRelocationConstructor())
+        return oc_implicit_relocation_constructor;
 
       if (Ctor->isMoveConstructor())
         return oc_implicit_move_constructor;
@@ -12528,6 +12558,9 @@ static void DiagnoseBadTarget(Sema &S, OverloadCandidate *Cand) {
       CSM = CXXSpecialMemberKind::CopyConstructor;
       break;
     case oc_implicit_move_constructor:
+      CSM = CXXSpecialMemberKind::MoveConstructor;
+      break;
+    case oc_implicit_relocation_constructor:
       CSM = CXXSpecialMemberKind::MoveConstructor;
       break;
     case oc_implicit_copy_assignment:
