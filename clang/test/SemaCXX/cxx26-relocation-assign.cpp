@@ -105,6 +105,40 @@ void test_deleted_implicit_reloc_assign_note(DeletedImplicitRelocAssign a,
   // expected-note@-8 {{candidate function (the implicit relocation assignment operator) has been implicitly deleted}}
 }
 
+struct ConstexprAssign {
+  int value;
+  constexpr ConstexprAssign(int value = 0) : value(value) {}
+  constexpr ConstexprAssign &operator=(ConstexprAssign src reloc) {
+    value = src.value;
+    return *this;
+  }
+};
+
+constexpr bool test_constexpr_reloc_assign() {
+  ConstexprAssign dst(0);
+  ConstexprAssign src(1);
+  dst = reloc src;
+  return dst.value == 1;
+}
+
+static_assert(test_constexpr_reloc_assign());
+
+struct ConstexprDefaultedAssign {
+  int value;
+  constexpr ConstexprDefaultedAssign(int value = 0) : value(value) {}
+  constexpr ConstexprDefaultedAssign &
+  operator=(ConstexprDefaultedAssign src reloc) = default;
+};
+
+constexpr bool test_constexpr_defaulted_reloc_assign() {
+  ConstexprDefaultedAssign dst(0);
+  ConstexprDefaultedAssign src(1);
+  dst = reloc src;
+  return dst.value == 1;
+}
+
+static_assert(test_constexpr_defaulted_reloc_assign());
+
 struct DefaultedBadConst {
   DefaultedBadConst &operator=(const DefaultedBadConst src reloc) = default; // expected-warning {{explicitly defaulted move assignment operator is implicitly deleted}}
   // expected-note@-1 {{function is implicitly deleted because its declared type does not match the type of an implicit move assignment operator}}

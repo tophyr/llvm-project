@@ -5977,6 +5977,14 @@ static bool CheckConstexprFunction(EvalInfo &Info, SourceLocation CallLoc,
     return false;
   }
 
+  if (!Body) {
+    if (const auto *MD = dyn_cast<CXXMethodDecl>(Declaration);
+        MD && MD->isDefaulted() && MD->isTrivial() &&
+        (MD->isCopyAssignmentOperator() || MD->isMoveAssignmentOperator() ||
+         MD->isRelocationAssignmentOperator()))
+      return true;
+  }
+
   // Can we evaluate this function call?
   if (Definition && Body &&
       (Definition->isConstexpr() || (Info.CurrentCall->CanEvalMSConstexpr &&
@@ -6591,22 +6599,27 @@ static bool EvaluateArgs(ArrayRef<const Expr *> Args, CallRef Call,
   return Success;
 }
 
-/// Perform a trivial copy from Param, which is the parameter of a copy or move
-/// constructor or assignment operator.
+/// Perform a trivial copy from Param, which is the parameter of a copy, move,
+/// or relocation constructor or assignment operator.
 static bool handleTrivialCopy(EvalInfo &Info, const ParmVarDecl *Param,
                               const Expr *E, APValue &Result,
                               bool CopyObjectRepresentation) {
-  // Find the reference argument.
+  // Find the copied argument.
   CallStackFrame *Frame = Info.CurrentCall;
-  APValue *RefValue = Info.getParamSlot(Frame->Arguments, Param);
-  if (!RefValue) {
+  APValue *ParamValue = Info.getParamSlot(Frame->Arguments, Param);
+  if (!ParamValue) {
     Info.FFDiag(E);
     return false;
   }
 
+  if (!Param->getType()->isReferenceType()) {
+    Result = *ParamValue;
+    return true;
+  }
+
   // Copy out the contents of the RHS object.
   LValue RefLValue;
-  RefLValue.setFrom(Info.Ctx, *RefValue);
+  RefLValue.setFrom(Info.Ctx, *ParamValue);
   return handleLValueToRValueConversion(
       Info, E, Param->getType().getNonReferenceType(), RefLValue, Result,
       CopyObjectRepresentation);
@@ -6637,7 +6650,8 @@ static bool HandleFunctionCall(SourceLocation CallLoc,
         isReadByLvalueToRvalueConversion(MD->getParent())))) {
     unsigned ExplicitOffset = MD->isExplicitObjectMemberFunction() ? 1 : 0;
     assert(ObjectArg &&
-           (MD->isCopyAssignmentOperator() || MD->isMoveAssignmentOperator()));
+           (MD->isCopyAssignmentOperator() || MD->isMoveAssignmentOperator() ||
+            MD->isRelocationAssignmentOperator()));
     APValue RHSValue;
     if (!handleTrivialCopy(Info, MD->getParamDecl(0), Args[0], RHSValue,
                            MD->getParent()->isUnion()))
@@ -8123,6 +8137,21 @@ public:
     SourceLocExprScopeGuard Guard(E, Info.CurrentCall->CurSourceLocExprScope);
     return StmtVisitorTy::Visit(E->getExpr());
   }
+  bool VisitCXXRelocExpr(const CXXRelocExpr *E) {
+    APValue Value;
+    if (!::Evaluate(Value, Info, E->getOperand()))
+      return false;
+
+    if (E->getOperand()->isGLValue()) {
+      LValue LV;
+      LV.setFrom(Info.Ctx, Value);
+      if (!handleLValueToRValueConversion(Info, E, E->getOperand()->getType(),
+                                          LV, Value))
+        return false;
+    }
+
+    return DerivedSuccess(Value, E);
+  }
 
   bool VisitCXXRelocateExpr(const CXXRelocateExpr *E) {
     LValue LV;
@@ -8499,8 +8528,9 @@ public:
     if (FD->hasCXXExplicitFunctionObjectParameter())
       This = &ObjectArg;
 
+    const FunctionDecl *Callable = Definition ? Definition : FD;
     if (!CheckConstexprFunction(Info, Loc, FD, Definition, Body) ||
-        !HandleFunctionCall(Loc, Definition, This, E, Args, Call, Body, Info,
+        !HandleFunctionCall(Loc, Callable, This, E, Args, Call, Body, Info,
                             Result, ResultSlot))
       return false;
 
@@ -8827,6 +8857,24 @@ public:
       return HandleLValueBasePath(this->Info, E, E->getSubExpr()->getType(),
                                   Result);
     }
+  }
+
+  bool VisitCXXDecomposedObjectExpr(const CXXDecomposedObjectExpr *E) {
+    if (E->isPreDecompositionAddress())
+      return this->Error(E);
+
+    if (!this->Visit(E->getOperand()))
+      return false;
+
+    if (!E->isBaseSubobject())
+      return true;
+
+    auto *Base = E->getType()->getAsCXXRecordDecl();
+    auto *DerivedRD = E->getOperand()->getType()->getAsCXXRecordDecl();
+    if (!DerivedRD || !Base)
+      return this->Error(E);
+
+    return CastToBaseClass(this->Info, E, Result, DerivedRD, Base);
   }
 };
 }
@@ -9621,6 +9669,12 @@ public:
         Info.Ctx, Info.CurrentCall->CurSourceLocExprScope.getDefaultExpr());
     Result.setFrom(Info.Ctx, LValResult);
     return true;
+  }
+
+  bool VisitCXXDecomposedObjectExpr(const CXXDecomposedObjectExpr *E) {
+    if (!E->isPreDecompositionAddress())
+      return Error(E);
+    return evaluateLValue(E->getOperand(), Result);
   }
 
   bool VisitEmbedExpr(const EmbedExpr *E) {

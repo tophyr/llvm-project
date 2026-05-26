@@ -125,6 +125,20 @@ void test_defaulted_copy_fallback_ctor(DefaultedCopyFallback src reloc) {
   (void)dst;
 }
 
+struct ConstexprCtor {
+  int value;
+  constexpr ConstexprCtor(int value = 1) : value(value) {}
+  constexpr ConstexprCtor(ConstexprCtor reloc) = default;
+};
+
+constexpr bool test_constexpr_reloc_ctor() {
+  ConstexprCtor src;
+  ConstexprCtor dst = reloc src;
+  return dst.value == 1;
+}
+
+static_assert(test_constexpr_reloc_ctor());
+
 struct DefaultedBadConst {
   DefaultedBadConst(const DefaultedBadConst reloc) = default; // expected-warning {{explicitly defaulted move constructor is implicitly deleted}}
   // expected-note@-1 {{function is implicitly deleted because its declared type does not match the type of an implicit move constructor}}
