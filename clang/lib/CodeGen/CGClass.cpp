@@ -35,6 +35,24 @@
 using namespace clang;
 using namespace CodeGen;
 
+static const ValueDecl *getWholeObjectRelocatedDecl(const Expr *E) {
+  E = E->IgnoreParenImpCasts();
+
+  const auto *UO = dyn_cast<UnaryOperator>(E);
+  if (!UO || UO->getOpcode() != UO_AddrOf)
+    return nullptr;
+
+  E = UO->getSubExpr()->IgnoreParenImpCasts();
+  while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(E)) {
+    if (!DOE->isWholeObject())
+      return nullptr;
+    E = DOE->getOperand()->IgnoreParenImpCasts();
+  }
+
+  const auto *DRE = dyn_cast<DeclRefExpr>(E);
+  return DRE ? dyn_cast<ValueDecl>(DRE->getDecl()) : nullptr;
+}
+
 /// Return the best known alignment for an unknown pointer to a
 /// particular class.
 CharUnits CodeGenModule::getClassPointerAlignment(const CXXRecordDecl *RD) {
@@ -2252,6 +2270,104 @@ void CodeGenFunction::emitVirtualSlicingFunctionBody(FunctionArgList &Args) {
 
   EmitBlock(ReturnBB);
   SliceScope.ForceCleanup();
+}
+
+void CodeGenFunction::EmitCXXRelocateExpr(const CXXRelocateExpr *E,
+                                          AggValueSlot Dest) {
+  if (const auto *VD = getWholeObjectRelocatedDecl(E->getOperand()))
+    DeactivateCleanupForRelocatedDecl(VD);
+
+  QualType ResultTy = E->getType();
+  Address DestAddr = Dest.getAddress();
+  llvm::Value *SrcPtr = EmitScalarExpr(E->getOperand());
+  QualType SrcPtrTy = E->getOperand()->getType();
+  QualType SrcTy = SrcPtrTy->getPointeeType();
+  Address Src = Address(SrcPtr, ConvertTypeForMem(SrcTy),
+                        getContext().getTypeAlignInChars(SrcTy));
+
+  if (const auto *RD = ResultTy->getAsCXXRecordDecl()) {
+    if (const auto *Slice = RD->getVirtualSlicingFunction()) {
+      CallArgList SliceArgs;
+      llvm::Constant *RTTI =
+          CGM.GetAddrOfRTTIDescriptor(ResultTy.getUnqualifiedType());
+      SliceArgs.add(RValue::get(Builder.CreatePointerCast(RTTI, VoidPtrTy)),
+                    Slice->getParamDecl(0)->getType());
+      SliceArgs.add(RValue::get(Builder.CreatePointerBitCastOrAddrSpaceCast(
+                        DestAddr.emitRawPointer(*this),
+                        ConvertType(Slice->getParamDecl(1)->getType()))),
+                    Slice->getParamDecl(1)->getType());
+      SliceArgs.add(RValue::get(Builder.getInt1(E->isReclaiming())),
+                    Slice->getParamDecl(2)->getType());
+      auto &FnInfo = CGM.getTypes().arrangeCXXMethodDeclaration(Slice);
+      auto *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
+      auto Callee =
+          CGCallee::forVirtual(nullptr, GlobalDecl(Slice), Src, FnTy);
+      EmitCXXMemberOrOperatorCall(Slice, Callee, ReturnValueSlot(),
+                                  Src.emitRawPointer(*this),
+                                  /*ImplicitParam=*/nullptr, QualType(),
+                                  /*CE=*/nullptr, &SliceArgs,
+                                  /*CallOrInvoke=*/nullptr);
+      return;
+    }
+
+    const CXXConstructorDecl *Ctor = nullptr;
+    for (const auto *Candidate : RD->ctors())
+      if (Candidate->isRelocationConstructor() && !Candidate->isDeleted()) {
+        Ctor = Candidate;
+        break;
+      }
+    if (!Ctor)
+      for (const auto *Candidate : RD->ctors())
+        if (Candidate->isMoveConstructor() && !Candidate->isDeleted()) {
+          Ctor = Candidate;
+          break;
+        }
+    if (!Ctor)
+      for (const auto *Candidate : RD->ctors())
+        if (Candidate->isCopyConstructor() && !Candidate->isDeleted()) {
+          Ctor = Candidate;
+          break;
+        }
+    assert(Ctor && "relocation builtin requires relocation, move, or copy ctor");
+
+    const CXXDestructorDecl *Dtor = RD->getDestructor();
+    RunCleanupsScope Scope(*this);
+    if (E->isReclaiming())
+      EHStack.pushCleanup<DeleteVirtualSliceStorage>(
+          NormalAndEHCleanup, Builder.getInt1(true), SrcPtr,
+          E->getOperatorDelete(), ResultTy);
+    if (!Ctor->isRelocationConstructor())
+      EHStack.pushCleanup<DestroyVirtualSliceObject>(NormalAndEHCleanup, Src,
+                                                    ResultTy, Dtor);
+
+    GlobalDecl CtorGD(Ctor, Ctor_Complete);
+    llvm::FunctionCallee CtorCallee = CGM.getAddrAndTypeOfCXXStructor(CtorGD);
+    llvm::FunctionType *CtorFnTy = CtorCallee.getFunctionType();
+    llvm::Value *CtorThis = Builder.CreateBitCast(
+        getAsNaturalPointerTo(DestAddr, Ctor->getThisType()),
+        CtorFnTy->getParamType(0));
+    llvm::Value *CtorSrc = Builder.CreateBitCast(
+        getAsNaturalPointerTo(Src, Ctor->getThisType()),
+        CtorFnTy->getParamType(1));
+    EmitCallOrInvoke(CtorCallee, {CtorThis, CtorSrc});
+    Scope.ForceCleanup();
+    return;
+  }
+
+  if (ResultTy->isAnyComplexType()) {
+    ComplexPairTy Value = EmitLoadOfComplex(MakeAddrLValue(Src, SrcTy),
+                                            E->getExprLoc());
+    EmitStoreOfComplex(Value, MakeAddrLValue(DestAddr, ResultTy),
+                       /*isInit=*/true);
+  } else {
+    llvm::Value *Value =
+        EmitLoadOfScalar(Src, /*Volatile=*/false, SrcTy, E->getExprLoc());
+    EmitStoreOfScalar(Value, MakeAddrLValue(DestAddr, ResultTy),
+                      /*isInit=*/true);
+  }
+
+  if (E->isReclaiming())
+    EmitDeleteCall(E->getOperatorDelete(), SrcPtr, ResultTy);
 }
 
 /// EmitCXXAggrConstructorCall - Emit a loop to call a particular

@@ -18469,6 +18469,8 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
             DefineImplicitDefaultConstructor(Loc, Constructor);
           } else if (Constructor->isCopyConstructor()) {
             DefineImplicitCopyConstructor(Loc, Constructor);
+          } else if (Constructor->isRelocationConstructor()) {
+            DefineImplicitMoveConstructor(Loc, Constructor);
           } else if (Constructor->isMoveConstructor()) {
             DefineImplicitMoveConstructor(Loc, Constructor);
           }

@@ -4979,6 +4979,41 @@ enum ImplicitInitializerKind {
   IIK_Inherit
 };
 
+static Sema::SpecialMemberOverloadResult
+lookupCallFromSpecialMember(Sema &S, CXXRecordDecl *Class,
+                            CXXSpecialMemberKind CSM, unsigned FieldQuals,
+                            bool ConstRHS);
+
+static Sema::SpecialMemberOverloadResult
+lookupDeclaredRelocationSpecialMember(CXXRecordDecl *Class, bool IsAssignment);
+
+enum class RelocationCtorArgumentKind {
+  Copy,
+  Move,
+  Reloc,
+};
+
+static RelocationCtorArgumentKind
+selectRelocationCtorArgumentKind(Sema &S, CXXRecordDecl *Class, unsigned Quals,
+                                 bool AllowReloc) {
+  if (AllowReloc) {
+    Sema::SpecialMemberOverloadResult Reloc =
+        lookupDeclaredRelocationSpecialMember(Class, /*IsAssignment=*/false);
+    if (Reloc.getKind() == Sema::SpecialMemberOverloadResult::Success &&
+        Reloc.getMethod() && !Reloc.getMethod()->isDeleted())
+      return RelocationCtorArgumentKind::Reloc;
+  }
+
+  Sema::SpecialMemberOverloadResult Move = lookupCallFromSpecialMember(
+      S, Class, CXXSpecialMemberKind::MoveConstructor, Quals,
+      /*ConstRHS=*/false);
+  if (Move.getKind() == Sema::SpecialMemberOverloadResult::Success &&
+      Move.getMethod() && !Move.getMethod()->isDeleted())
+    return RelocationCtorArgumentKind::Move;
+
+  return RelocationCtorArgumentKind::Copy;
+}
+
 static bool
 BuildImplicitBaseInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
                              ImplicitInitializerKind ImplicitInitKind,
@@ -5004,7 +5039,7 @@ BuildImplicitBaseInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
   case IIK_Move:
   case IIK_Copy:
   case IIK_Reloc: {
-    bool Relocating = ImplicitInitKind == IIK_Reloc;
+    bool Relocating = false;
     bool Moving = ImplicitInitKind == IIK_Move;
     ParmVarDecl *Param = Constructor->getParamDecl(0);
     QualType ParamType = Param->getType().getNonReferenceType();
@@ -5022,6 +5057,14 @@ BuildImplicitBaseInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
       SemaRef.Context.getQualifiedType(BaseSpec->getType().getUnqualifiedType(),
                                        ParamType.getQualifiers());
 
+    if (ImplicitInitKind == IIK_Reloc) {
+      RelocationCtorArgumentKind Kind = selectRelocationCtorArgumentKind(
+          SemaRef, BaseSpec->getType()->getAsCXXRecordDecl(),
+          ParamType.getCVRQualifiers(), /*AllowReloc=*/!BaseSpec->isVirtual());
+      Relocating = Kind == RelocationCtorArgumentKind::Reloc;
+      Moving = Kind == RelocationCtorArgumentKind::Move;
+    }
+
     if (Moving) {
       CopyCtorArg = CastForMoving(SemaRef, CopyCtorArg);
     }
@@ -5033,7 +5076,7 @@ BuildImplicitBaseInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
                                             Moving ? VK_XValue : VK_LValue,
                                             &BasePath).get();
 
-    if (Relocating && !BaseSpec->isVirtual()) {
+    if (Relocating) {
       CopyCtorArg =
           SemaRef.ActOnRelocExpr(nullptr, Constructor->getLocation(),
                                  CopyCtorArg)
@@ -5069,7 +5112,11 @@ BuildImplicitBaseInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
 }
 
 static bool RefersToRValueRef(Expr *MemRef) {
-  ValueDecl *Referenced = cast<MemberExpr>(MemRef)->getMemberDecl();
+  MemRef = MemRef->IgnoreParenImpCasts();
+  const auto *ME = dyn_cast<MemberExpr>(MemRef);
+  if (!ME)
+    return false;
+  ValueDecl *Referenced = ME->getMemberDecl();
   return Referenced->getType()->isRValueReferenceType();
 }
 
@@ -5085,7 +5132,7 @@ BuildImplicitMemberInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
 
   if (ImplicitInitKind == IIK_Copy || ImplicitInitKind == IIK_Move ||
       ImplicitInitKind == IIK_Reloc) {
-    bool Relocating = ImplicitInitKind == IIK_Reloc;
+    bool Relocating = false;
     bool Moving = ImplicitInitKind == IIK_Move;
     ParmVarDecl *Param = Constructor->getParamDecl(0);
     QualType ParamType = Param->getType().getNonReferenceType();
@@ -5124,6 +5171,26 @@ BuildImplicitMemberInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
                                          /*S*/nullptr);
     if (CtorArg.isInvalid())
       return true;
+
+    if (ImplicitInitKind == IIK_Reloc) {
+      if (const auto *RecordTy =
+              SemaRef.Context.getBaseElementType(Field->getType())
+                  ->getAs<RecordType>()) {
+        RelocationCtorArgumentKind Kind = selectRelocationCtorArgumentKind(
+            SemaRef, cast<CXXRecordDecl>(RecordTy->getDecl()),
+            Field->getType().getCVRQualifiers(), /*AllowReloc=*/true);
+        Relocating = Kind == RelocationCtorArgumentKind::Reloc;
+        Moving = Kind == RelocationCtorArgumentKind::Move;
+      } else {
+        Relocating = true;
+      }
+    }
+
+    if (Moving && ImplicitInitKind == IIK_Reloc) {
+      CtorArg = CastForMoving(SemaRef, CtorArg.get());
+      if (CtorArg.isInvalid())
+        return true;
+    }
 
     if (Relocating) {
       CtorArg = SemaRef.ActOnRelocExpr(nullptr, Loc, CtorArg.get());
@@ -16915,14 +16982,17 @@ ExprResult Sema::BuildCXXConstructExpr(
       // to find the source object needs to handle it.
       // Right now it assumes the source object is passed directly as the
       // first argument.
-      Constructor->isCopyOrMoveConstructor() && hasOneRealArgument(ExprArgs)) {
+      (Constructor->isCopyOrMoveConstructor() ||
+       Constructor->isRelocationConstructor()) &&
+      hasOneRealArgument(ExprArgs)) {
     Expr *SubExpr = ExprArgs[0];
     // FIXME: Per above, this is also incorrect if we want to accept
     //        converting constructors, as isTemporaryObject will
     //        reject temporaries with different type from the
     //        CXXRecord itself.
     Elidable = SubExpr->isTemporaryObject(
-        Context, cast<CXXRecordDecl>(FoundDecl->getDeclContext()));
+                   Context, cast<CXXRecordDecl>(FoundDecl->getDeclContext())) ||
+               isa<CXXRelocateExpr>(SubExpr->IgnoreParenImpCasts());
   }
 
   return BuildCXXConstructExpr(ConstructLoc, DeclInitType,

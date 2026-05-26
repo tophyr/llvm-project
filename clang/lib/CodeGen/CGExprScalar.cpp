@@ -475,6 +475,10 @@ public:
   Value *VisitParenExpr(ParenExpr *PE) {
     return Visit(PE->getSubExpr());
   }
+  Value *VisitCXXRelocExpr(CXXRelocExpr *E) {
+    CGF.EmitRelocExprCleanupDeactivation(E);
+    return Visit(E->getOperand());
+  }
   Value *VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *E) {
     return Visit(E->getReplacement());
   }

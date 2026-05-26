@@ -1145,8 +1145,7 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
   if (IsRelocDecompositionSubobject(Operand)) {
     bool CanRelocateSubobject = false;
     if (const auto *PVD = DRE ? dyn_cast<ParmVarDecl>(DRE->getDecl()) : nullptr)
-      CanRelocateSubobject =
-          PVD->isRelocParameter() && PVD->getIdentifier() != nullptr;
+      CanRelocateSubobject = PVD->isRelocParameter();
     else if (BD)
       CanRelocateSubobject = BD->isRelocDecompositionBinding();
     else if (VD)

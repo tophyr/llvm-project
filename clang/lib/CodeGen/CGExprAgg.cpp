@@ -118,6 +118,13 @@ public:
     CGF.ErrorUnsupported(S, "aggregate expression");
   }
   void VisitParenExpr(ParenExpr *PE) { Visit(PE->getSubExpr()); }
+  void VisitCXXRelocExpr(CXXRelocExpr *E) {
+    CGF.EmitRelocExprCleanupDeactivation(E);
+    Visit(E->getOperand());
+  }
+  void VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+    CGF.EmitCXXRelocateExpr(E, Dest);
+  }
   void VisitCXXImplicitDecompositionExpr(CXXImplicitDecompositionExpr *E) {
     CGF.EnterImplicitDecomposition(E);
     Visit(E->getOperand());

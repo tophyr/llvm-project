@@ -7585,10 +7585,11 @@ static ExprResult CopyObject(Sema &S,
   // should still be able to elide the copy, but we don't have a way to
   // represent in the AST how much should be elided in this case.
   bool Elidable =
-      CurInitExpr->isTemporaryObject(S.Context, Class) &&
       S.Context.hasSameUnqualifiedType(
           Best->Function->getParamDecl(0)->getType().getNonReferenceType(),
-          CurInitExpr->getType());
+          CurInitExpr->getType()) &&
+      (CurInitExpr->isTemporaryObject(S.Context, Class) ||
+       isa<CXXRelocateExpr>(CurInitExpr->IgnoreParenImpCasts()));
 
   // Actually perform the constructor call.
   CurInit = S.BuildCXXConstructExpr(

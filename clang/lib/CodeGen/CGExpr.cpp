@@ -82,6 +82,23 @@ enum VariableTypeDescriptorKind : uint16_t {
   TK_Unknown = 0xffff
 };
 
+void CodeGenFunction::EmitRelocExprCleanupDeactivation(const CXXRelocExpr *E) {
+  const Expr *Operand = E->getOperand()->IgnoreParenImpCasts();
+  const auto *DRE = dyn_cast<DeclRefExpr>(Operand);
+  if (!DRE)
+    return;
+
+  const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl());
+  if (!VD)
+    return;
+
+  if (const auto *Var = dyn_cast<VarDecl>(VD))
+    if (!Var->hasLocalStorage())
+      return;
+
+  DeactivateCleanupForRelocatedDecl(VD);
+}
+
 namespace {
 
 struct ImplicitDecompositionStep {

@@ -632,7 +632,9 @@ CodeGenFunction::EmitCXXConstructExpr(const CXXConstructExpr *E,
     //        conversion sequences which involve two steps, with a
     //        conversion operator followed by a converting constructor.
     const Expr *SrcObj = E->getArg(0);
-    assert(SrcObj->isTemporaryObject(getContext(), CD->getParent()));
+    assert((SrcObj->isTemporaryObject(getContext(), CD->getParent()) ||
+            isa<CXXRelocateExpr>(SrcObj->IgnoreParenImpCasts())) &&
+           "unexpected elidable construction source");
     assert(
         getContext().hasSameUnqualifiedType(E->getType(), SrcObj->getType()));
     EmitAggExpr(SrcObj, Dest);
