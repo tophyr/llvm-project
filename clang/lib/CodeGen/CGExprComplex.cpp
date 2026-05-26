@@ -121,8 +121,33 @@ public:
   VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *PE) {
     return Visit(PE->getReplacement());
   }
+  ComplexPairTy VisitCXXRelocExpr(CXXRelocExpr *E) {
+    CGF.EmitRelocExprCleanupDeactivation(E);
+    return Visit(E->getOperand());
+  }
+  ComplexPairTy VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+    Address Temp = CGF.CreateMemTemp(E->getType(), "reloc.result");
+    CGF.EmitCXXRelocateExpr(
+        E, AggValueSlot::forAddr(Temp, E->getType().getQualifiers(),
+                                 AggValueSlot::IsNotDestructed,
+                                 AggValueSlot::DoesNotNeedGCBarriers,
+                                 AggValueSlot::IsNotAliased,
+                                 AggValueSlot::MayOverlap));
+    return CGF.EmitLoadOfComplex(CGF.MakeAddrLValue(Temp, E->getType()),
+                                 E->getExprLoc());
+  }
+  ComplexPairTy VisitCXXImplicitDecompositionExpr(
+      CXXImplicitDecompositionExpr *E) {
+    CGF.EnterImplicitDecomposition(E);
+    ComplexPairTy Result = Visit(E->getOperand());
+    CGF.LeaveImplicitDecomposition(E);
+    return Result;
+  }
   ComplexPairTy VisitCoawaitExpr(CoawaitExpr *S) {
     return CGF.EmitCoawaitExpr(*S).getComplexVal();
+  }
+  ComplexPairTy VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+    return Visit(E->getOperand());
   }
   ComplexPairTy VisitCoyieldExpr(CoyieldExpr *S) {
     return CGF.EmitCoyieldExpr(*S).getComplexVal();

@@ -71,6 +71,43 @@
 using namespace clang;
 using namespace sema;
 
+static const FunctionDecl *resolveCallFunctionDecl(const Expr *E,
+                                                   const ASTContext &Context) {
+  if (!E)
+    return nullptr;
+
+  E = E->IgnoreParenImpCasts();
+  if (E->isValueDependent())
+    return nullptr;
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    if (const auto *FD = dyn_cast<FunctionDecl>(DRE->getDecl()))
+      return FD;
+    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+      if (const Expr *Init = VD->getInit())
+        return resolveCallFunctionDecl(Init, Context);
+    return nullptr;
+  }
+
+  if (const auto *UO = dyn_cast<UnaryOperator>(E))
+    if (UO->getOpcode() == UO_AddrOf)
+      return resolveCallFunctionDecl(UO->getSubExpr(), Context);
+
+  if (const auto *ME = dyn_cast<MemberExpr>(E))
+    if (const auto *FD = dyn_cast<FunctionDecl>(ME->getMemberDecl()))
+      return FD;
+
+  if (const auto *BO = dyn_cast<BinaryOperator>(E);
+      BO && (BO->getOpcode() == BO_PtrMemD || BO->getOpcode() == BO_PtrMemI))
+    return resolveCallFunctionDecl(BO->getRHS(), Context);
+
+  Expr::EvalResult Result;
+  if (E->EvaluateAsRValue(Result, Context) && Result.Val.isMemberPointer())
+    return dyn_cast_or_null<FunctionDecl>(Result.Val.getMemberPointerDecl());
+
+  return nullptr;
+}
+
 bool Sema::CanUseDecl(NamedDecl *D, bool TreatUnavailableAsInvalid) {
   // See if this is an auto-typed variable whose initializer we are parsing.
   if (ParsingInitForAutoVars.count(D))
@@ -2423,6 +2460,30 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
   return E;
 }
 
+bool Sema::DiagnoseUseOfRelocatedValue(const ValueDecl *D, SourceLocation Loc) {
+  RecordRelocationUse(nullptr, D, Loc);
+  return false;
+}
+
+void Sema::RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                               SourceLocation Loc) {
+  auto *FSI = getCurFunction();
+  if (!FSI || !currentEvaluationContext().isPotentiallyEvaluated())
+    return;
+
+  FSI->recordRelocationUse(Site, D, Loc);
+}
+
+void Sema::RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                               const NamedDecl *Subobject,
+                               SourceLocation Loc) {
+  auto *FSI = getCurFunction();
+  if (!FSI || !currentEvaluationContext().isPotentiallyEvaluated())
+    return;
+
+  FSI->recordRelocationUse(Site, D, Subobject, Loc);
+}
+
 void
 Sema::DecomposeUnqualifiedId(const UnqualifiedId &Id,
                              TemplateArgumentListInfo &Buffer,
@@ -3251,6 +3312,16 @@ static void diagnoseUncapturableValueReferenceOrBinding(Sema &S,
                                                         SourceLocation loc,
                                                         ValueDecl *var);
 
+static bool isNamedDecomposedObject(const ValueDecl *VD) {
+  if (const auto *PVD = dyn_cast<ParmVarDecl>(VD))
+    return PVD->isRelocParameter() && PVD->getIdentifier() != nullptr;
+  if (const auto *BD = dyn_cast<BindingDecl>(VD))
+    return BD->isRelocDecompositionBinding();
+  if (const auto *Var = dyn_cast<VarDecl>(VD))
+    return Var->isRelocObject();
+  return false;
+}
+
 ExprResult Sema::BuildDeclarationNameExpr(
     const CXXScopeSpec &SS, const DeclarationNameInfo &NameInfo, NamedDecl *D,
     NamedDecl *FoundD, const TemplateArgumentListInfo *TemplateArgs,
@@ -3490,6 +3561,11 @@ ExprResult Sema::BuildDeclarationNameExpr(
   auto *E =
       BuildDeclRefExpr(VD, type, valueKind, NameInfo, &SS, FoundD,
                        /*FIXME: TemplateKWLoc*/ SourceLocation(), TemplateArgs);
+  if (E && valueKind == VK_LValue && isNamedDecomposedObject(VD))
+    return new (Context) CXXDecomposedObjectExpr(
+        type, E, NameInfo.getLoc(), CXXDecomposedObjectExpr::AK_WholeObject,
+        /*BaseTypeDecl=*/nullptr, /*IsDirectBase=*/false,
+        /*IsVirtualBase=*/false);
   // Clang AST consumers assume a DeclRefExpr refers to a valid decl. We
   // wrap a DeclRefExpr referring to an invalid decl with a dependent-type
   // RecoveryExpr to avoid follow-up semantic analysis (thus prevent bogus
@@ -6007,7 +6083,7 @@ Sema::ConvertArgumentsForCall(CallExpr *Call, Expr *Fn,
   VariadicCallType CallType = getVariadicCallType(FDecl, Proto, Fn);
 
   Invalid = GatherArgumentsForCall(Call->getExprLoc(), FDecl, Proto, 0, Args,
-                                   AllArgs, CallType);
+                                   AllArgs, Fn, CallType);
   if (Invalid)
     return true;
   unsigned TotalNumArgs = AllArgs.size();
@@ -6022,17 +6098,23 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc, FunctionDecl *FDecl,
                                   const FunctionProtoType *Proto,
                                   unsigned FirstParam, ArrayRef<Expr *> Args,
                                   SmallVectorImpl<Expr *> &AllArgs,
+                                  Expr *CalleeExpr,
                                   VariadicCallType CallType, bool AllowExplicit,
                                   bool IsListInitialization) {
   unsigned NumParams = Proto->getNumParams();
   bool Invalid = false;
   size_t ArgIx = 0;
+  const FunctionDecl *ResolvedFD = FDecl;
+  if (!ResolvedFD)
+    ResolvedFD = resolveCallFunctionDecl(CalleeExpr, Context);
   // Continue to check argument types (even if we have too few/many args).
   for (unsigned i = FirstParam; i < NumParams; i++) {
     QualType ProtoArgType = Proto->getParamType(i);
 
     Expr *Arg;
-    ParmVarDecl *Param = FDecl ? FDecl->getParamDecl(i) : nullptr;
+    ParmVarDecl *Param =
+        ResolvedFD ? const_cast<ParmVarDecl *>(ResolvedFD->getParamDecl(i))
+                   : nullptr;
     if (ArgIx < Args.size()) {
       Arg = Args[ArgIx++];
 
@@ -6068,6 +6150,17 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc, FunctionDecl *FDecl,
                                                          ProtoArgType)
                 : InitializedEntity::InitializeParameter(
                       Context, ProtoArgType, Proto->isParamConsumed(i));
+
+      if (Param && Param->isRelocParameter()) {
+        if (const auto *DOE =
+                dyn_cast<CXXDecomposedObjectExpr>(Arg->IgnoreParenImpCasts());
+            DOE && DOE->isWholeObject()) {
+          ExprResult RelocArg = ActOnRelocExpr(/*S=*/nullptr, Arg->getExprLoc(), Arg);
+          if (RelocArg.isInvalid())
+            return true;
+          Arg = RelocArg.get();
+        }
+      }
 
       // Remember that parameter belongs to a CF audited API.
       if (CFAudited)
@@ -18376,6 +18469,8 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
             DefineImplicitDefaultConstructor(Loc, Constructor);
           } else if (Constructor->isCopyConstructor()) {
             DefineImplicitCopyConstructor(Loc, Constructor);
+          } else if (Constructor->isRelocationConstructor()) {
+            DefineImplicitMoveConstructor(Loc, Constructor);
           } else if (Constructor->isMoveConstructor()) {
             DefineImplicitMoveConstructor(Loc, Constructor);
           }
@@ -18798,7 +18893,8 @@ static bool isVariableCapturable(CapturingScopeInfo *CSI, ValueDecl *Var,
     return false;
   }
 
-  if (isa<BindingDecl>(Var)) {
+  if (const auto *BD = dyn_cast<BindingDecl>(Var);
+      BD && !BD->isRelocDecompositionBinding()) {
     if (!IsLambda || !S.getLangOpts().CPlusPlus) {
       if (Diagnose)
         diagnoseUncapturableValueReferenceOrBinding(S, Loc, Var);
@@ -20238,6 +20334,9 @@ MarkExprReferenced(Sema &SemaRef, SourceLocation Loc, Decl *D, Expr *E,
 }
 
 void Sema::MarkDeclRefReferenced(DeclRefExpr *E, const Expr *Base) {
+  if (auto *VD = dyn_cast<ValueDecl>(E->getDecl()))
+    RecordRelocationUse(E, VD, E->getLocation());
+
   // [basic.def.odr] (CWG 1614)
   // A function is named by an expression or conversion [...]
   // unless it is a pure virtual function and either the expression is not an

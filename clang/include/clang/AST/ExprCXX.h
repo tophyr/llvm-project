@@ -4281,6 +4281,199 @@ public:
   }
 };
 
+class CXXRelocExpr : public Expr {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  Stmt *Operand;
+  SourceLocation RelocLoc;
+
+public:
+  CXXRelocExpr(QualType Ty, Expr *Operand, SourceLocation RelocLoc)
+      : Expr(CXXRelocExprClass, Ty, VK_PRValue, OK_Ordinary), Operand(Operand),
+        RelocLoc(RelocLoc) {
+    setDependence(Operand->getDependence());
+  }
+
+  CXXRelocExpr(EmptyShell Empty) : Expr(CXXRelocExprClass, Empty) {}
+
+  Expr *getOperand() const { return cast<Expr>(Operand); }
+  void setOperand(Expr *E) { Operand = E; }
+
+  SourceLocation getRelocLoc() const { return RelocLoc; }
+  void setRelocLoc(SourceLocation Loc) { RelocLoc = Loc; }
+
+  SourceLocation getBeginLoc() const { return RelocLoc; }
+  SourceLocation getEndLoc() const { return getOperand()->getEndLoc(); }
+  SourceRange getSourceRange() const {
+    return SourceRange(getBeginLoc(), getEndLoc());
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXRelocExprClass;
+  }
+
+  child_range children() { return child_range(&Operand, &Operand + 1); }
+  const_child_range children() const {
+    return const_child_range(&Operand, &Operand + 1);
+  }
+};
+
+class CXXImplicitDecompositionExpr : public Expr {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  Stmt *Operand;
+
+public:
+  CXXImplicitDecompositionExpr(QualType Ty, Expr *Operand)
+      : Expr(CXXImplicitDecompositionExprClass, Ty, Operand->getValueKind(),
+             Operand->getObjectKind()),
+        Operand(Operand) {
+    setDependence(Operand->getDependence());
+  }
+
+  CXXImplicitDecompositionExpr(EmptyShell Empty)
+      : Expr(CXXImplicitDecompositionExprClass, Empty) {}
+
+  Expr *getOperand() const { return cast<Expr>(Operand); }
+  void setOperand(Expr *E) { Operand = E; }
+
+  SourceLocation getBeginLoc() const { return getOperand()->getBeginLoc(); }
+  SourceLocation getEndLoc() const { return getOperand()->getEndLoc(); }
+  SourceRange getSourceRange() const {
+    return SourceRange(getBeginLoc(), getEndLoc());
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXImplicitDecompositionExprClass;
+  }
+
+  child_range children() { return child_range(&Operand, &Operand + 1); }
+  const_child_range children() const {
+    return const_child_range(&Operand, &Operand + 1);
+  }
+};
+
+class CXXRelocateExpr : public Expr {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  FunctionDecl *OperatorDelete = nullptr;
+  Stmt *Operand = nullptr;
+
+public:
+  CXXRelocateExpr(QualType Ty, Expr *Operand, SourceLocation BuiltinLoc,
+                  bool Reclaim, FunctionDecl *OperatorDelete)
+      : Expr(CXXRelocateExprClass, Ty, VK_PRValue, OK_Ordinary),
+        OperatorDelete(OperatorDelete), Operand(Operand) {
+    CXXRelocateExprBits.Reclaim = Reclaim;
+    CXXRelocateExprBits.BuiltinLoc = BuiltinLoc;
+    setDependence(Operand->getDependence());
+  }
+
+  CXXRelocateExpr(EmptyShell Empty) : Expr(CXXRelocateExprClass, Empty) {}
+
+  Expr *getOperand() const { return cast<Expr>(Operand); }
+  void setOperand(Expr *E) { Operand = E; }
+
+  bool isReclaiming() const { return CXXRelocateExprBits.Reclaim; }
+
+  FunctionDecl *getOperatorDelete() const { return OperatorDelete; }
+  void setOperatorDelete(FunctionDecl *FD) { OperatorDelete = FD; }
+
+  SourceLocation getBuiltinLoc() const { return CXXRelocateExprBits.BuiltinLoc; }
+  void setBuiltinLoc(SourceLocation Loc) { CXXRelocateExprBits.BuiltinLoc = Loc; }
+
+  SourceLocation getBeginLoc() const { return getBuiltinLoc(); }
+  SourceLocation getEndLoc() const { return getOperand()->getEndLoc(); }
+  SourceRange getSourceRange() const {
+    return SourceRange(getBeginLoc(), getEndLoc());
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXRelocateExprClass;
+  }
+
+  child_range children() { return child_range(&Operand, &Operand + 1); }
+  const_child_range children() const {
+    return const_child_range(&Operand, &Operand + 1);
+  }
+};
+
+class CXXDecomposedObjectExpr : public Expr {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  Stmt *Operand = nullptr;
+  const TypeDecl *BaseTypeDecl = nullptr;
+  SourceLocation AccessLoc;
+
+public:
+  enum AccessKind {
+    AK_WholeObject,
+    AK_BaseSubobject,
+    AK_PreDecompositionAddress,
+  };
+
+  CXXDecomposedObjectExpr(QualType Ty, Expr *Operand, SourceLocation AccessLoc,
+                          AccessKind Kind, const TypeDecl *BaseTypeDecl,
+                          bool IsDirectBase, bool IsVirtualBase)
+      : Expr(CXXDecomposedObjectExprClass, Ty,
+             Kind == AK_PreDecompositionAddress ? VK_PRValue : VK_LValue,
+             OK_Ordinary),
+        Operand(Operand), BaseTypeDecl(BaseTypeDecl), AccessLoc(AccessLoc) {
+    CXXDecomposedObjectExprBits.AccessKind = Kind;
+    CXXDecomposedObjectExprBits.IsDirectBase = IsDirectBase;
+    CXXDecomposedObjectExprBits.IsVirtualBase = IsVirtualBase;
+    setDependence(Operand->getDependence());
+  }
+
+  CXXDecomposedObjectExpr(EmptyShell Empty)
+      : Expr(CXXDecomposedObjectExprClass, Empty) {}
+
+  Expr *getOperand() const { return cast<Expr>(Operand); }
+  void setOperand(Expr *E) { Operand = E; }
+
+  AccessKind getAccessKind() const {
+    return static_cast<AccessKind>(CXXDecomposedObjectExprBits.AccessKind);
+  }
+  bool isWholeObject() const { return getAccessKind() == AK_WholeObject; }
+  bool isBaseSubobject() const { return getAccessKind() == AK_BaseSubobject; }
+  bool isPreDecompositionAddress() const {
+    return getAccessKind() == AK_PreDecompositionAddress;
+  }
+  bool isDirectBaseSubobject() const {
+    return isBaseSubobject() && CXXDecomposedObjectExprBits.IsDirectBase;
+  }
+  bool isVirtualBaseSubobject() const {
+    return isBaseSubobject() && CXXDecomposedObjectExprBits.IsVirtualBase;
+  }
+
+  const TypeDecl *getBaseTypeDecl() const { return BaseTypeDecl; }
+  void setBaseTypeDecl(const TypeDecl *TD) { BaseTypeDecl = TD; }
+
+  SourceLocation getAccessLoc() const { return AccessLoc; }
+  void setAccessLoc(SourceLocation Loc) { AccessLoc = Loc; }
+
+  SourceLocation getBeginLoc() const { return getOperand()->getBeginLoc(); }
+  SourceLocation getEndLoc() const {
+    return isWholeObject() ? getOperand()->getEndLoc() : AccessLoc;
+  }
+  SourceRange getSourceRange() const {
+    return SourceRange(getBeginLoc(), getEndLoc());
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXDecomposedObjectExprClass;
+  }
+
+  child_range children() { return child_range(&Operand, &Operand + 1); }
+  const_child_range children() const {
+    return const_child_range(&Operand, &Operand + 1);
+  }
+};
+
 /// Represents a C++11 pack expansion that produces a sequence of
 /// expressions.
 ///

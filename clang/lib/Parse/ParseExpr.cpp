@@ -864,6 +864,20 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
   ParseIdentifier: {    // primary-expression: identifier
                         // unqualified-id: identifier
                         // constant: enumeration-constant
+    if (getLangOpts().Relocation && Tok.getIdentifierInfo()) {
+      if (!Ident_reloc)
+        Ident_reloc = &PP.getIdentifierTable().get("reloc");
+      if (Tok.getIdentifierInfo() == Ident_reloc) {
+        if (NotPrimaryExpression)
+          *NotPrimaryExpression = true;
+        SourceLocation RelocLoc = ConsumeToken();
+        Res = ParseCastExpression(CastParseKind::AnyCastExpr);
+        if (!Res.isInvalid())
+          Res = Actions.ActOnRelocExpr(getCurScope(), RelocLoc, Res.get());
+        return Res;
+      }
+    }
+
     // Turn a potentially qualified name into a annot_typename or
     // annot_cxxscope if it would be valid.  This handles things like x::y, etc.
     if (getLangOpts().CPlusPlus) {
@@ -2001,6 +2015,10 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
         // such a common method name. For other C++ keywords that are
         // Objective-C method names, one must use the message send syntax.
         IdentifierInfo *Id = Tok.getIdentifierInfo();
+        SourceLocation Loc = ConsumeToken();
+        Name.setIdentifier(Id, Loc);
+      } else if (Tok.is(tok::kw_this)) {
+        IdentifierInfo *Id = &PP.getIdentifierTable().get("this");
         SourceLocation Loc = ConsumeToken();
         Name.setIdentifier(Id, Loc);
       } else if (ParseUnqualifiedId(

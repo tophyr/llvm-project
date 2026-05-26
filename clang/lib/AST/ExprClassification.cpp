@@ -132,6 +132,11 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
   case Expr::DependentCoawaitExprClass:
   case Expr::CXXDependentScopeMemberExprClass:
   case Expr::DependentScopeDeclRefExprClass:
+  case Expr::CXXDecomposedObjectExprClass:
+    if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(E);
+        DOE && DOE->isPreDecompositionAddress())
+      return Cl::CL_PRValue;
+    LLVM_FALLTHROUGH;
     // ObjC instance variables are lvalues
     // FIXME: ObjC++0x might have different rules
   case Expr::ObjCIvarRefExprClass:
@@ -190,6 +195,8 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
   case Expr::BlockExprClass:
   case Expr::FloatingLiteralClass:
   case Expr::CXXNoexceptExprClass:
+  case Expr::CXXRelocExprClass:
+  case Expr::CXXRelocateExprClass:
   case Expr::CXXScalarValueInitExprClass:
   case Expr::TypeTraitExprClass:
   case Expr::ArrayTypeTraitExprClass:
@@ -313,6 +320,7 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
 
   case Expr::RecoveryExprClass:
   case Expr::OpaqueValueExprClass:
+  case Expr::CXXImplicitDecompositionExprClass:
     return ClassifyExprValueKind(Lang, E, E->getValueKind());
 
     // Pseudo-object expressions can produce l-values with reference magic.

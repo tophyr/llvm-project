@@ -2714,6 +2714,9 @@ DEF_TRAVERSE_STMT(CXXTypeidExpr, {
     TRY_TO(TraverseTypeLoc(S->getTypeOperandSourceInfo()->getTypeLoc()));
 })
 
+DEF_TRAVERSE_STMT(CXXDecomposedObjectExpr, {})
+DEF_TRAVERSE_STMT(CXXImplicitDecompositionExpr, {})
+
 DEF_TRAVERSE_STMT(MSPropertyRefExpr, {
   TRY_TO(TraverseNestedNameSpecifierLoc(S->getQualifierLoc()));
 })
@@ -2849,6 +2852,8 @@ DEF_TRAVERSE_STMT(CXXPseudoDestructorExpr, {
 
 DEF_TRAVERSE_STMT(CXXThisExpr, {})
 DEF_TRAVERSE_STMT(CXXThrowExpr, {})
+DEF_TRAVERSE_STMT(CXXRelocExpr, {})
+DEF_TRAVERSE_STMT(CXXRelocateExpr, {})
 DEF_TRAVERSE_STMT(UserDefinedLiteral, {})
 DEF_TRAVERSE_STMT(DesignatedInitExpr, {})
 DEF_TRAVERSE_STMT(DesignatedInitUpdateExpr, {})

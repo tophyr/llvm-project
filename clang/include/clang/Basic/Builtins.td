@@ -958,6 +958,24 @@ def Launder : Builtin {
   let Prototype = "void*(void*)";
 }
 
+def RelocAndUninitialize : LangBuiltin<"CXX_LANG"> {
+  let Spellings = ["__builtin_reloc_and_uninitialize"];
+  let Attributes = [CustomTypeChecking];
+  let Prototype = "void(void*)";
+}
+
+def RelocAndReclaim : LangBuiltin<"CXX_LANG"> {
+  let Spellings = ["__builtin_reloc_and_reclaim"];
+  let Attributes = [CustomTypeChecking];
+  let Prototype = "void(void*)";
+}
+
+def ConstructAtReloc : LangBuiltin<"CXX_LANG"> {
+  let Spellings = ["__builtin_construct_at_reloc"];
+  let Attributes = [CustomTypeChecking, Constexpr];
+  let Prototype = "void*(void*, void*)";
+}
+
 def IsConstantEvaluated : LangBuiltin<"CXX_LANG"> {
   let Spellings = ["__builtin_is_constant_evaluated"];
   let Attributes = [NoThrow, Constexpr];

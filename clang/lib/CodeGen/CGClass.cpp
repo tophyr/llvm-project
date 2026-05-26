@@ -35,6 +35,24 @@
 using namespace clang;
 using namespace CodeGen;
 
+static const ValueDecl *getWholeObjectRelocatedDecl(const Expr *E) {
+  E = E->IgnoreParenImpCasts();
+
+  const auto *UO = dyn_cast<UnaryOperator>(E);
+  if (!UO || UO->getOpcode() != UO_AddrOf)
+    return nullptr;
+
+  E = UO->getSubExpr()->IgnoreParenImpCasts();
+  while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(E)) {
+    if (!DOE->isWholeObject())
+      return nullptr;
+    E = DOE->getOperand()->IgnoreParenImpCasts();
+  }
+
+  const auto *DRE = dyn_cast<DeclRefExpr>(E);
+  return DRE ? dyn_cast<ValueDecl>(DRE->getDecl()) : nullptr;
+}
+
 /// Return the best known alignment for an unknown pointer to a
 /// particular class.
 CharUnits CodeGenModule::getClassPointerAlignment(const CXXRecordDecl *RD) {
@@ -1572,6 +1590,136 @@ void CodeGenFunction::emitImplicitAssignmentOperatorBody(FunctionArgList &Args) 
 }
 
 namespace {
+struct SliceEnabledBase {
+  const CXXBaseSpecifier *Base = nullptr;
+  const CXXRecordDecl *Record = nullptr;
+};
+
+static void collectSliceEnabledSubtree(const CXXRecordDecl *RD,
+                                       llvm::SmallPtrSetImpl<const CXXRecordDecl *> &Result) {
+  if (!Result.insert(RD).second)
+    return;
+
+  for (const auto &Base : RD->bases()) {
+    const auto *BaseRD = Base.getType()->getAsCXXRecordDecl();
+    if (!BaseRD || !BaseRD->hasVirtualSlicingFunction())
+      continue;
+    collectSliceEnabledSubtree(BaseRD, Result);
+  }
+}
+
+static llvm::Value *emitTargetMatchesType(CodeGenFunction &CGF,
+                                          llvm::Value *TargetType,
+                                          QualType RecordType) {
+  llvm::Constant *RTTI =
+      CGF.CGM.GetAddrOfRTTIDescriptor(RecordType.getUnqualifiedType());
+  llvm::Value *RTTIPtr = CGF.Builder.CreatePointerCast(RTTI, CGF.VoidPtrTy);
+  return CGF.Builder.CreateICmpEQ(TargetType, RTTIPtr);
+}
+
+static llvm::Value *emitTargetMatchesSubtree(
+    CodeGenFunction &CGF, llvm::Value *TargetType,
+    const SliceEnabledBase &BaseInfo) {
+  llvm::SmallPtrSet<const CXXRecordDecl *, 8> Reachable;
+  collectSliceEnabledSubtree(BaseInfo.Record, Reachable);
+
+  llvm::Value *Match = nullptr;
+  for (const CXXRecordDecl *ReachableRD : Reachable) {
+    llvm::Value *ThisMatch = emitTargetMatchesType(
+        CGF, TargetType, CGF.getContext().getTagDeclType(ReachableRD));
+    Match = Match ? CGF.Builder.CreateOr(Match, ThisMatch) : ThisMatch;
+  }
+  return Match ? Match : CGF.Builder.getFalse();
+}
+
+struct DestroyVirtualSliceObject final : EHScopeStack::Cleanup {
+  Address This;
+  QualType ThisType;
+  const CXXDestructorDecl *Dtor;
+
+  DestroyVirtualSliceObject(Address This, QualType ThisType,
+                            const CXXDestructorDecl *Dtor)
+      : This(This), ThisType(ThisType), Dtor(Dtor) {}
+
+  void Emit(CodeGenFunction &CGF, Flags Flags) override {
+    CGF.EmitCXXDestructorCall(Dtor, Dtor_Complete, /*ForVirtualBase=*/false,
+                              /*Delegating=*/false, This, ThisType);
+  }
+};
+
+struct DeleteVirtualSliceStorage final : EHScopeStack::Cleanup {
+  llvm::Value *ShouldReclaim;
+  llvm::Value *ThisPtr;
+  const FunctionDecl *OperatorDelete;
+  QualType DeleteTy;
+
+  DeleteVirtualSliceStorage(llvm::Value *ShouldReclaim, llvm::Value *ThisPtr,
+                            const FunctionDecl *OperatorDelete,
+                            QualType DeleteTy)
+      : ShouldReclaim(ShouldReclaim), ThisPtr(ThisPtr),
+        OperatorDelete(OperatorDelete), DeleteTy(DeleteTy) {}
+
+  void Emit(CodeGenFunction &CGF, Flags Flags) override {
+    llvm::BasicBlock *DeleteBB = CGF.createBasicBlock("slice.delete");
+    llvm::BasicBlock *ContBB = CGF.createBasicBlock("slice.delete.cont");
+    CGF.Builder.CreateCondBr(ShouldReclaim, DeleteBB, ContBB);
+    CGF.EmitBlock(DeleteBB);
+    CGF.EmitDeleteCall(OperatorDelete, ThisPtr, DeleteTy);
+    CGF.Builder.CreateBr(ContBB);
+    CGF.EmitBlock(ContBB);
+  }
+};
+
+struct DestroyObjectExcludingBase final : EHScopeStack::Cleanup {
+  Address This;
+  QualType ThisType;
+  const CXXBaseSpecifier *BaseSpec;
+
+  DestroyObjectExcludingBase(Address This, QualType ThisType,
+                             const CXXBaseSpecifier *BaseSpec)
+      : This(This), ThisType(ThisType), BaseSpec(BaseSpec) {}
+
+  static void emitDestroyExceptBase(CodeGenFunction &CGF, Address Addr,
+                                    QualType Type,
+                                    const CXXBaseSpecifier *ExcludedBase) {
+    const auto *RD = Type->getAsCXXRecordDecl();
+    if (!RD)
+      return;
+
+    LValue ThisLV = CGF.MakeAddrLValue(Addr, Type);
+
+    SmallVector<const FieldDecl *, 8> Fields(RD->fields());
+    for (const auto *FD : llvm::reverse(Fields)) {
+      if (FD->isUnnamedBitField())
+        continue;
+      LValue FieldLV = CGF.EmitLValueForField(ThisLV, FD);
+      assert(FieldLV.isSimple());
+      if (auto DK = FD->getType().isDestructedType(); DK != QualType::DK_none)
+        CGF.emitDestroy(FieldLV.getAddress(), FD->getType(),
+                        CGF.getDestroyer(DK),
+                        /*useEHCleanupForArray=*/false);
+    }
+
+    for (const auto &Base : llvm::reverse(RD->bases())) {
+      const auto *BaseRD = Base.getType()->getAsCXXRecordDecl();
+      if (!BaseRD)
+        continue;
+      if (&Base == ExcludedBase)
+        continue;
+
+      Address BaseAddr = CGF.GetAddressOfDirectBaseInCompleteClass(
+          Addr, RD, BaseRD, Base.isVirtual());
+      if (auto DK = Base.getType().isDestructedType(); DK != QualType::DK_none)
+        CGF.emitDestroy(BaseAddr, Base.getType(), CGF.getDestroyer(DK),
+                        /*useEHCleanupForArray=*/false);
+    }
+  }
+
+  void Emit(CodeGenFunction &CGF, Flags Flags) override {
+    emitDestroyExceptBase(CGF, This, ThisType, BaseSpec);
+  }
+};
+
   llvm::Value *LoadThisForDtorDelete(CodeGenFunction &CGF,
                                      const CXXDestructorDecl *DD) {
     if (Expr *ThisArg = DD->getOperatorDeleteThisArg())
@@ -1974,6 +2122,257 @@ void CodeGenFunction::EnterDtorCleanups(const CXXDestructorDecl *DD,
 
   if (SanitizeFields)
     SanitizeBuilder.End();
+}
+
+void CodeGenFunction::emitVirtualSlicingFunctionBody(FunctionArgList &Args) {
+  const auto *Slice = cast<CXXMethodDecl>(CurGD.getDecl());
+  const auto *RD = Slice->getParent();
+  const auto *Dtor = RD->getDestructor();
+  assert(Dtor && "virtual slicing function requires a destructor");
+
+  QualType ThisType = getContext().getTagDeclType(RD);
+  Address This = LoadCXXThisAddress();
+  llvm::Value *ThisPtr = LoadCXXThis();
+
+  auto LoadScalarParam = [&](const ParmVarDecl *Param) {
+    Address ParamAddr = GetAddrOfLocalVar(Param);
+    llvm::Value *Value = Builder.CreateLoad(
+        ParamAddr, Param->getType().isVolatileQualified(), Param->getName());
+    if (Param->getType()->isBooleanType() && !Value->getType()->isIntegerTy(1))
+      Value = Builder.CreateTrunc(Value, Builder.getInt1Ty(), "bool");
+    return Value;
+  };
+
+  const auto *TargetParam = Slice->getParamDecl(0);
+  const auto *DestParam = Slice->getParamDecl(1);
+  const auto *ReclaimParam = Slice->getParamDecl(2);
+  llvm::Value *TargetType = LoadScalarParam(TargetParam);
+  llvm::Value *DestPtr = LoadScalarParam(DestParam);
+  llvm::Value *ShouldReclaim = LoadScalarParam(ReclaimParam);
+
+  RunCleanupsScope SliceScope(*this);
+  EHStack.pushCleanup<DeleteVirtualSliceStorage>(
+      NormalAndEHCleanup, ShouldReclaim, ThisPtr, Dtor->getOperatorDelete(),
+      ThisType);
+
+  llvm::BasicBlock *SameTypeBB = createBasicBlock("slice.same");
+  llvm::BasicBlock *DispatchBB = createBasicBlock("slice.dispatch");
+  llvm::BasicBlock *ReturnBB = createBasicBlock("slice.return");
+  llvm::Value *IsSameType =
+      emitTargetMatchesType(*this, TargetType, ThisType);
+  Builder.CreateCondBr(IsSameType, SameTypeBB, DispatchBB);
+
+  EmitBlock(SameTypeBB);
+  {
+    Address Dest = Address(DestPtr, ConvertTypeForMem(ThisType),
+                           getContext().getTypeAlignInChars(ThisType));
+
+    const CXXConstructorDecl *Ctor = nullptr;
+    for (const auto *Candidate : RD->ctors())
+      if (Candidate->isRelocationConstructor() && !Candidate->isDeleted()) {
+        Ctor = Candidate;
+        break;
+      }
+    if (!Ctor)
+      for (const auto *Candidate : RD->ctors())
+        if (Candidate->isMoveConstructor() && !Candidate->isDeleted()) {
+          Ctor = Candidate;
+          break;
+        }
+    if (!Ctor)
+      for (const auto *Candidate : RD->ctors())
+        if (Candidate->isCopyConstructor() && !Candidate->isDeleted()) {
+          Ctor = Candidate;
+          break;
+        }
+    assert(Ctor && "virtual slicing requires relocation, move, or copy ctor");
+
+    RunCleanupsScope SameTypeScope(*this);
+    if (!Ctor->isRelocationConstructor())
+      EHStack.pushCleanup<DestroyVirtualSliceObject>(NormalAndEHCleanup, This,
+                                                    ThisType, Dtor);
+
+    GlobalDecl CtorGD(Ctor, Ctor_Complete);
+    llvm::FunctionCallee CtorCallee = CGM.getAddrAndTypeOfCXXStructor(CtorGD);
+    llvm::FunctionType *CtorFnTy = CtorCallee.getFunctionType();
+    llvm::Value *CtorThis =
+        Builder.CreateBitCast(getAsNaturalPointerTo(Dest, Ctor->getThisType()),
+                              CtorFnTy->getParamType(0));
+    llvm::Value *CtorSrc =
+        Builder.CreateBitCast(getAsNaturalPointerTo(This, Ctor->getThisType()),
+                              CtorFnTy->getParamType(1));
+    EmitCallOrInvoke(CtorCallee, {CtorThis, CtorSrc});
+    SameTypeScope.ForceCleanup();
+    Builder.CreateBr(ReturnBB);
+  }
+
+  EmitBlock(DispatchBB);
+  SmallVector<SliceEnabledBase, 4> SliceBases;
+  for (const auto &Base : RD->bases()) {
+    const auto *BaseRD = Base.getType()->getAsCXXRecordDecl();
+    if (!BaseRD || !BaseRD->hasVirtualSlicingFunction())
+      continue;
+    SliceBases.push_back({&Base, BaseRD});
+  }
+
+  if (SliceBases.empty()) {
+    Builder.CreateBr(ReturnBB);
+  } else {
+    llvm::BasicBlock *NextBB = nullptr;
+    for (unsigned I = 0, E = SliceBases.size(); I != E; ++I) {
+      const SliceEnabledBase &BaseInfo = SliceBases[I];
+      llvm::BasicBlock *MatchBB = createBasicBlock("slice.base");
+      NextBB = (I + 1 == E) ? ReturnBB : createBasicBlock("slice.next");
+      llvm::Value *Matches = emitTargetMatchesSubtree(*this, TargetType, BaseInfo);
+      Builder.CreateCondBr(Matches, MatchBB, NextBB);
+
+      EmitBlock(MatchBB);
+      {
+        Address BaseAddr = GetAddressOfDirectBaseInCompleteClass(
+            This, RD, BaseInfo.Record, BaseInfo.Base->isVirtual());
+        RunCleanupsScope BaseScope(*this);
+        EHStack.pushCleanup<DestroyObjectExcludingBase>(
+            NormalAndEHCleanup, This, ThisType, BaseInfo.Base);
+
+        CallArgList BaseArgs;
+        BaseArgs.add(RValue::get(TargetType),
+                     BaseInfo.Record->getVirtualSlicingFunction()
+                         ->getParamDecl(0)
+                         ->getType());
+        BaseArgs.add(RValue::get(DestPtr),
+                     BaseInfo.Record->getVirtualSlicingFunction()
+                         ->getParamDecl(1)
+                         ->getType());
+        BaseArgs.add(RValue::get(Builder.getFalse()),
+                     BaseInfo.Record->getVirtualSlicingFunction()
+                         ->getParamDecl(2)
+                         ->getType());
+        auto BaseGD = GlobalDecl(BaseInfo.Record->getVirtualSlicingFunction());
+        auto &BaseFnInfo = CGM.getTypes().arrangeCXXMethodDeclaration(
+            BaseInfo.Record->getVirtualSlicingFunction());
+        auto BaseFnTy = CGM.getTypes().GetFunctionType(BaseFnInfo);
+        auto BaseCallee = CGCallee::forDirect(CGM.GetAddrOfFunction(BaseGD, BaseFnTy),
+                                              BaseGD);
+        EmitCXXMemberOrOperatorCall(BaseInfo.Record->getVirtualSlicingFunction(),
+                                    BaseCallee, ReturnValueSlot(),
+                                    BaseAddr.emitRawPointer(*this),
+                                    /*ImplicitParam=*/nullptr, QualType(),
+                                    /*CE=*/nullptr, &BaseArgs,
+                                    /*CallOrInvoke=*/nullptr);
+        BaseScope.ForceCleanup();
+        Builder.CreateBr(ReturnBB);
+      }
+
+      if (NextBB != ReturnBB)
+        EmitBlock(NextBB);
+    }
+  }
+
+  EmitBlock(ReturnBB);
+  SliceScope.ForceCleanup();
+}
+
+void CodeGenFunction::EmitRelocateToAddress(
+    QualType ResultTy, Address DestAddr, llvm::Value *SrcPtr, QualType SrcPtrTy,
+    bool Reclaim, const FunctionDecl *OperatorDelete) {
+  QualType SrcTy = SrcPtrTy->getPointeeType();
+  Address Src = Address(SrcPtr, ConvertTypeForMem(SrcTy),
+                        getContext().getTypeAlignInChars(SrcTy));
+
+  if (const auto *RD = ResultTy->getAsCXXRecordDecl()) {
+    if (const auto *Slice = RD->getVirtualSlicingFunction()) {
+      CallArgList SliceArgs;
+      llvm::Constant *RTTI =
+          CGM.GetAddrOfRTTIDescriptor(ResultTy.getUnqualifiedType());
+      SliceArgs.add(RValue::get(Builder.CreatePointerCast(RTTI, VoidPtrTy)),
+                    Slice->getParamDecl(0)->getType());
+      SliceArgs.add(RValue::get(Builder.CreatePointerBitCastOrAddrSpaceCast(
+                        DestAddr.emitRawPointer(*this),
+                        ConvertType(Slice->getParamDecl(1)->getType()))),
+                    Slice->getParamDecl(1)->getType());
+      SliceArgs.add(RValue::get(Builder.getInt1(Reclaim)),
+                    Slice->getParamDecl(2)->getType());
+      auto &FnInfo = CGM.getTypes().arrangeCXXMethodDeclaration(Slice);
+      auto *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
+      auto Callee =
+          CGCallee::forVirtual(nullptr, GlobalDecl(Slice), Src, FnTy);
+      EmitCXXMemberOrOperatorCall(Slice, Callee, ReturnValueSlot(),
+                                  Src.emitRawPointer(*this),
+                                  /*ImplicitParam=*/nullptr, QualType(),
+                                  /*CE=*/nullptr, &SliceArgs,
+                                  /*CallOrInvoke=*/nullptr);
+      return;
+    }
+
+    const CXXConstructorDecl *Ctor = nullptr;
+    for (const auto *Candidate : RD->ctors())
+      if (Candidate->isRelocationConstructor() && !Candidate->isDeleted()) {
+        Ctor = Candidate;
+        break;
+      }
+    if (!Ctor)
+      for (const auto *Candidate : RD->ctors())
+        if (Candidate->isMoveConstructor() && !Candidate->isDeleted()) {
+          Ctor = Candidate;
+          break;
+        }
+    if (!Ctor)
+      for (const auto *Candidate : RD->ctors())
+        if (Candidate->isCopyConstructor() && !Candidate->isDeleted()) {
+          Ctor = Candidate;
+          break;
+        }
+    assert(Ctor && "relocation builtin requires relocation, move, or copy ctor");
+
+    const CXXDestructorDecl *Dtor = RD->getDestructor();
+    RunCleanupsScope Scope(*this);
+    if (Reclaim)
+      EHStack.pushCleanup<DeleteVirtualSliceStorage>(
+          NormalAndEHCleanup, Builder.getInt1(true), SrcPtr, OperatorDelete,
+          ResultTy);
+    if (!Ctor->isRelocationConstructor())
+      EHStack.pushCleanup<DestroyVirtualSliceObject>(NormalAndEHCleanup, Src,
+                                                    ResultTy, Dtor);
+
+    GlobalDecl CtorGD(Ctor, Ctor_Complete);
+    llvm::FunctionCallee CtorCallee = CGM.getAddrAndTypeOfCXXStructor(CtorGD);
+    llvm::FunctionType *CtorFnTy = CtorCallee.getFunctionType();
+    llvm::Value *CtorThis = Builder.CreateBitCast(
+        getAsNaturalPointerTo(DestAddr, Ctor->getThisType()),
+        CtorFnTy->getParamType(0));
+    llvm::Value *CtorSrc = Builder.CreateBitCast(
+        getAsNaturalPointerTo(Src, Ctor->getThisType()),
+        CtorFnTy->getParamType(1));
+    EmitCallOrInvoke(CtorCallee, {CtorThis, CtorSrc});
+    Scope.ForceCleanup();
+    return;
+  }
+
+  if (ResultTy->isAnyComplexType()) {
+    ComplexPairTy Value = EmitLoadOfComplex(MakeAddrLValue(Src, SrcTy),
+                                            SourceLocation());
+    EmitStoreOfComplex(Value, MakeAddrLValue(DestAddr, ResultTy),
+                       /*isInit=*/true);
+  } else {
+    llvm::Value *Value =
+        EmitLoadOfScalar(Src, /*Volatile=*/false, SrcTy, SourceLocation());
+    EmitStoreOfScalar(Value, MakeAddrLValue(DestAddr, ResultTy),
+                      /*isInit=*/true);
+  }
+
+  if (Reclaim)
+    EmitDeleteCall(OperatorDelete, SrcPtr, ResultTy);
+}
+
+void CodeGenFunction::EmitCXXRelocateExpr(const CXXRelocateExpr *E,
+                                          AggValueSlot Dest) {
+  if (const auto *VD = getWholeObjectRelocatedDecl(E->getOperand()))
+    DeactivateCleanupForRelocatedDecl(VD);
+
+  EmitRelocateToAddress(E->getType(), Dest.getAddress(),
+                        EmitScalarExpr(E->getOperand()),
+                        E->getOperand()->getType(), E->isReclaiming(),
+                        E->getOperatorDelete());
 }
 
 /// EmitCXXAggrConstructorCall - Emit a loop to call a particular

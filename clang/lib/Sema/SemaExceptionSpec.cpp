@@ -1114,6 +1114,14 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   //   [Can throw] if in a potentially-evaluated context the expression would
   //   contain:
   switch (S->getStmtClass()) {
+  case Expr::CXXDecomposedObjectExprClass:
+    return canThrow(cast<CXXDecomposedObjectExpr>(S)->getOperand());
+  case Expr::CXXImplicitDecompositionExprClass:
+    return canThrow(cast<CXXImplicitDecompositionExpr>(S)->getOperand());
+  case Expr::CXXRelocExprClass:
+    return canThrow(cast<CXXRelocExpr>(S)->getOperand());
+  case Expr::CXXRelocateExprClass:
+    return CT_Can;
   case Expr::ConstantExprClass:
     return canThrow(cast<ConstantExpr>(S)->getSubExpr());
 

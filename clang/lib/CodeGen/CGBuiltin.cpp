@@ -4799,6 +4799,17 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
 
     return RValue::get(Ptr);
   }
+  case Builtin::BI__builtin_construct_at_reloc: {
+    Address Dest = EmitPointerWithAlignment(E->getArg(0));
+    Value *SrcPtr = EmitScalarExpr(E->getArg(1));
+    QualType SrcPtrTy = E->getArg(1)->getType();
+    if (SrcPtrTy->isVoidPointerType())
+      SrcPtrTy = getContext().getPointerType(E->getArg(0)->getType()->getPointeeType());
+    EmitRelocateToAddress(E->getArg(0)->getType()->getPointeeType(), Dest,
+                          SrcPtr, SrcPtrTy,
+                          /*Reclaim=*/false);
+    return RValue::get(Dest, *this);
+  }
   case Builtin::BI__sync_fetch_and_add:
   case Builtin::BI__sync_fetch_and_sub:
   case Builtin::BI__sync_fetch_and_or:

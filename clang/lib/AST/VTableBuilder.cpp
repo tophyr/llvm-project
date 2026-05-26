@@ -1606,6 +1606,8 @@ void ItaniumVTableBuilder::AddMethods(
           return A->isMoveAssignmentOperator();
         if (isa<CXXDestructorDecl>(A) != isa<CXXDestructorDecl>(B))
           return isa<CXXDestructorDecl>(A);
+        if (A->isVirtualSlicingFunction() != B->isVirtualSlicingFunction())
+          return A->isVirtualSlicingFunction();
         assert(A->getOverloadedOperator() == OO_EqualEqual &&
                B->getOverloadedOperator() == OO_EqualEqual &&
                "unexpected or duplicate implicit virtual function");

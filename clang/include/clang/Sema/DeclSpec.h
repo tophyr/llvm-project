@@ -1914,6 +1914,9 @@ private:
   /// The C++17 structured binding, if any. This is an alternative to a Name.
   DecompositionDeclarator BindingGroup;
 
+  bool IsRelocParameter = false;
+  bool IsRelocObject = false;
+
   /// DeclTypeInfo - This holds each type that the declarator includes as it is
   /// parsed.  This is pushed from the identifier out, which means that element
   /// #0 will be the most closely bound to the identifier, and
@@ -2342,6 +2345,11 @@ public:
   void SetIdentifier(const IdentifierInfo *Id, SourceLocation IdLoc) {
     Name.setIdentifier(Id, IdLoc);
   }
+
+  bool isRelocParameter() const { return IsRelocParameter; }
+  void setRelocParameter(bool IsReloc) { IsRelocParameter = IsReloc; }
+  bool isRelocObject() const { return IsRelocObject; }
+  void setRelocObject(bool IsReloc) { IsRelocObject = IsReloc; }
 
   /// Set the decomposition bindings for this declarator.
   void setDecompositionBindings(

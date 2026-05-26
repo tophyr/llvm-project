@@ -1672,6 +1672,46 @@ void CXXRecordDecl::setTrivialForCallFlags(CXXMethodDecl *D) {
     data().DeclaredNonTrivialSpecialMembersForCall |= SMKind;
 }
 
+bool CXXRecordDecl::hasUserDeclaredRelocationConstructor() const {
+  for (const auto *Ctor : ctors())
+    if (!Ctor->isImplicit() && Ctor->isRelocationConstructor())
+      return true;
+  return false;
+}
+
+bool CXXRecordDecl::hasUserDeclaredRelocationAssignment() const {
+  for (const auto *Method : methods())
+    if (!Method->isImplicit() && Method->isRelocationAssignmentOperator())
+      return true;
+  return false;
+}
+
+bool CXXRecordDecl::hasDeclaredRelocationConstructor() const {
+  for (const auto *Ctor : ctors())
+    if (Ctor->isRelocationConstructor())
+      return true;
+  return false;
+}
+
+bool CXXRecordDecl::hasDeclaredRelocationAssignment() const {
+  for (const auto *Method : methods())
+    if (Method->isRelocationAssignmentOperator())
+      return true;
+  return false;
+}
+
+static bool isVirtualSlicingFunctionName(DeclarationName Name) {
+  const IdentifierInfo *II = Name.getAsIdentifierInfo();
+  return II && II->isStr("__reloc_slice");
+}
+
+CXXMethodDecl *CXXRecordDecl::getVirtualSlicingFunction() const {
+  for (auto *Method : methods())
+    if (Method->isVirtualSlicingFunction())
+      return Method;
+  return nullptr;
+}
+
 bool CXXRecordDecl::isCLike() const {
   if (getTagKind() == TagTypeKind::Class ||
       getTagKind() == TagTypeKind::Interface ||
@@ -2715,6 +2755,9 @@ bool CXXMethodDecl::isCopyAssignmentOperator() const {
     return false;
 
   QualType ParamType = getNonObjectParameter(0)->getType();
+  if (getNonObjectParameter(0)->isRelocParameter())
+    return false;
+
   if (const auto *Ref = ParamType->getAs<LValueReferenceType>())
     ParamType = Ref->getPointeeType();
 
@@ -2722,6 +2765,44 @@ bool CXXMethodDecl::isCopyAssignmentOperator() const {
   QualType ClassType
     = Context.getCanonicalType(Context.getTypeDeclType(getParent()));
   return Context.hasSameUnqualifiedType(ClassType, ParamType);
+}
+
+bool CXXMethodDecl::isRelocationAssignmentOperator() const {
+  if (getOverloadedOperator() != OO_Equal || isStatic() ||
+      getPrimaryTemplate() || getDescribedFunctionTemplate() ||
+      getNumExplicitParams() != 1)
+    return false;
+
+  const ParmVarDecl *Param = getNonObjectParameter(0);
+  if (!Param->isRelocParameter())
+    return false;
+
+  ASTContext &Context = getASTContext();
+  QualType ParamType = Context.getCanonicalType(Param->getType());
+  QualType ClassType =
+      Context.getCanonicalType(Context.getTypeDeclType(getParent()));
+  return Context.hasSameUnqualifiedType(ParamType, ClassType);
+}
+
+bool CXXMethodDecl::isVirtualSlicingFunction() const {
+  if (!isImplicit() || !isInstance() || getPrimaryTemplate() ||
+      getDescribedFunctionTemplate() || getNumExplicitParams() != 3)
+    return false;
+  if (!isVirtualSlicingFunctionName(getDeclName()) ||
+      !getReturnType()->isVoidType())
+    return false;
+
+  const auto *Proto = getType()->getAs<FunctionProtoType>();
+  if (!Proto || Proto->getMethodQuals().hasQualifiers() ||
+      Proto->getRefQualifier() != RQ_None)
+    return false;
+
+  QualType First = getParamDecl(0)->getType();
+  QualType Second = getParamDecl(1)->getType();
+  QualType Third = getParamDecl(2)->getType();
+  return First->isPointerType() && First->getPointeeType().isConstQualified() &&
+         First->getPointeeType()->isVoidType() && Second->isVoidPointerType() &&
+         Third->isBooleanType();
 }
 
 bool CXXMethodDecl::isMoveAssignmentOperator() const {
@@ -3006,6 +3087,22 @@ CXXConstructorDecl::isCopyConstructor(unsigned &TypeQuals) const {
 bool CXXConstructorDecl::isMoveConstructor(unsigned &TypeQuals) const {
   return isCopyOrMoveConstructor(TypeQuals) &&
          getParamDecl(0)->getType()->isRValueReferenceType();
+}
+
+bool CXXConstructorDecl::isRelocationConstructor() const {
+  if (!hasOneParamOrDefaultArgs() || getPrimaryTemplate() != nullptr ||
+      getDescribedFunctionTemplate() != nullptr)
+    return false;
+
+  const ParmVarDecl *Param = getParamDecl(0);
+  if (!Param->isRelocParameter())
+    return false;
+
+  ASTContext &Context = getASTContext();
+  CanQualType ParamType = Context.getCanonicalType(Param->getType());
+  CanQualType ClassTy =
+      Context.getCanonicalType(Context.getTagDeclType(getParent()));
+  return ParamType.getUnqualifiedType() == ClassTy;
 }
 
 /// Determine whether this is a copy or move constructor.
@@ -3593,6 +3690,11 @@ VarDecl *BindingDecl::getHoldingVar() const {
   auto *VD = cast<VarDecl>(DRE->getDecl());
   assert(VD->isImplicit() && "holding var for binding decl not implicit");
   return VD;
+}
+
+bool BindingDecl::isRelocDecompositionBinding() const {
+  const auto *DD = dyn_cast_if_present<DecompositionDecl>(getDecomposedDecl());
+  return DD && DD->isRelocObject();
 }
 
 ArrayRef<BindingDecl *> BindingDecl::getBindingPackDecls() const {

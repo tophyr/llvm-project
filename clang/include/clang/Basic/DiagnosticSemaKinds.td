@@ -2871,6 +2871,8 @@ def err_underlying_type_of_incomplete_enum : Error<
 // C++11 delegating constructors
 def err_delegating_ctor : Error<
   "delegating constructors are permitted only in C++11">;
+def err_delegating_relocation_ctor : Error<
+  "delegating relocation constructors are not supported">;
 def warn_cxx98_compat_delegating_ctor : Warning<
   "delegating constructors are incompatible with C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
@@ -4991,8 +4993,10 @@ def select_ovl_candidate_kind : TextSubstitution<
     "constructor (the implicit default constructor)|"
     "constructor (the implicit copy constructor)|"
     "constructor (the implicit move constructor)|"
+    "constructor (the implicit relocation constructor)|"
     "function (the implicit copy assignment operator)|"
     "function (the implicit move assignment operator)|"
+    "function (the implicit relocation assignment operator)|"
     "function (the implicit 'operator==' for this 'operator<=>)'|"
     "inherited constructor}0%select{| template| %2}1">;
 
@@ -7955,6 +7959,48 @@ def err_explicit_object_parameter_nonmember: Error<
   "%select{static|virtual|non-member}0 %select{function|lambda}1">;
 def err_explicit_object_parameter_constructor: Error<
   "an explicit object parameter cannot appear in a %select{constructor|destructor}0">;
+def err_reloc_object_invalid_context : Error<
+  "'reloc' may only appear on a function parameter or local variable definition">;
+def err_reloc_object_bad_type : Error<
+  "'reloc' may only be applied to a non-union class object of non-reference type">;
+def err_reloc_object_user_provided_destructor : Error<
+  "'reloc' may not decompose type %0 because its destructor is user-provided">;
+def err_virtual_slicing_user_provided_destructor : Error<
+  "virtual slicing function for %0 is ill-formed because its destructor is user-provided">;
+def err_virtual_slicing_no_eligible_ctor : Error<
+  "virtual slicing function for %0 is ill-formed because it has no eligible relocation, move, or copy constructor">;
+def err_reloc_parameter_invalid_context : Error<
+  "'reloc' parameter syntax is only valid on a constructor or assignment "
+  "operator parameter">;
+def err_reloc_parameter_must_be_first : Error<
+  "'reloc' parameter must be the first parameter of a constructor or "
+  "assignment operator">;
+def err_reloc_parameter_bad_type : Error<
+  "'reloc' parameter must have the same unqualified type as its enclosing "
+  "class">;
+def err_reloc_parameter_non_declaration : Error<
+  "'reloc' parameter is only permitted in a function declaration">;
+def err_reloc_operand_not_glvalue : Error<
+  "'reloc' operand must be a glvalue or prvalue of object type">;
+def err_reloc_operand_not_local : Error<
+  "'reloc' operand must name a local variable or parameter">;
+def err_reloc_operand_not_complete_object : Error<
+  "'reloc' operand must name a complete object">;
+def err_reloc_operand_binding : Error<
+  "'reloc' operand cannot name a structured binding">;
+def err_reloc_operand_capture : Error<
+  "'reloc' operand cannot name a lambda capture">;
+def err_defaulted_reloc_ctor_param_type : Error<
+  "an explicitly-defaulted relocation constructor must have parameter type %0">;
+def err_defaulted_reloc_assign_param_type : Error<
+  "an explicitly-defaulted decomposing relocation assignment operator must have parameter type %0">;
+def err_defaulted_nondecomposing_reloc_assign : Error<
+  "only decomposing relocation assignment operators may be defaulted">;
+def err_use_after_reloc : Error<
+  "object %0 cannot be used after it has been relocated">;
+def err_use_after_reloc_subobject : Error<
+  "subobject %0 of decomposed object %1 cannot be used after it has been relocated">;
+def note_relocated_here : Note<"object relocated here">;
 def err_explicit_object_parameter_mutable: Error<
   "a lambda with an explicit object parameter cannot be mutable">;
 def err_invalid_explicit_object_type_in_lambda: Error<
@@ -7967,6 +8013,18 @@ def err_explicit_object_lambda_inaccessible_base : Error<
   "the type must derive publicly from the lambda">;
 def err_explicit_object_parameter_invalid: Error<
   "an explicit object parameter can only appear as the first parameter of a member function">;
+def err_decomposed_object_value_use : Error<
+  "decomposed object %0 cannot be used as a value">;
+def err_decomposed_object_nonstatic_member : Error<
+  "non-static member %0 cannot be used through decomposed object %1">;
+def err_decomposed_object_decltype_paren : Error<
+  "decomposed object %0 cannot be parenthesized in a decltype operand">;
+def err_decomposed_object_member_pointer_not_constant : Error<
+  "pointer-to-member access through decomposed object %0 requires a constant-evaluated member pointer">;
+def err_reloc_parameter_mismatch : Error<
+  "'reloc' parameter mismatch in redeclaration of %0">;
+def err_reloc_parameter_unmovable_type : Error<
+  "'reloc' parameter type %0 must have an eligible relocation, move, or copy constructor">;
 
 def err_ref_qualifier_overload : Error<
   "cannot overload a member function %select{without a ref-qualifier|with "
@@ -12783,6 +12841,12 @@ def warn_cast_discards_cfi_unchecked_callee
 def err_builtin_launder_invalid_arg : Error<
   "%select{non-pointer|function pointer|void pointer}0 argument to "
   "'__builtin_launder' is not allowed">;
+def err_builtin_relocate_invalid_arg : Error<
+  "%select{non-pointer|function pointer|void pointer}0 argument to "
+  "'%1' is not allowed">;
+def err_builtin_relocate_no_eligible_ctor : Error<
+  "'%0' cannot relocate an object of type %1 because it has no eligible "
+  "relocation, move, or copy constructor">;
 def err_builtin_assume_aligned_invalid_arg : Error<
   "non-pointer argument to '__builtin_assume_aligned' is not allowed">;
 

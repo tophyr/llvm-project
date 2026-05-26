@@ -17,6 +17,7 @@
 #include <__cxx03/__memory/voidify.h>
 #include <__cxx03/__type_traits/enable_if.h>
 #include <__cxx03/__type_traits/is_array.h>
+#include <__cxx03/__type_traits/remove_cv.h>
 #include <__cxx03/__utility/declval.h>
 #include <__cxx03/__utility/forward.h>
 #include <__cxx03/__utility/move.h>
@@ -38,6 +39,28 @@ _LIBCPP_HIDE_FROM_ABI _Tp* __construct_at(_Tp* __location, _Args&&... __args) {
   return _LIBCPP_ASSERT_NON_NULL(__location != nullptr, "null pointer given to construct_at"),
          ::new (std::__voidify(*__location)) _Tp(std::forward<_Args>(__args)...);
 }
+
+#if _LIBCPP_STD_VER >= 26
+template <class _Tp>
+_LIBCPP_HIDE_FROM_ABI constexpr _Tp* construct_at(_Tp* __location, _Tp __src) {
+  _LIBCPP_ASSERT_NON_NULL(__location != nullptr, "null pointer given to construct_at");
+  return __builtin_construct_at_reloc(__location, __src.this);
+}
+
+#  if __has_builtin(__builtin_reloc_and_uninitialize)
+template <class _Tp>
+_LIBCPP_HIDE_FROM_ABI remove_cv_t<_Tp> reloc_and_uninitialize(_Tp* __src) {
+  _LIBCPP_ASSERT_NON_NULL(__src != nullptr, "null pointer given to reloc_and_uninitialize");
+  return __builtin_reloc_and_uninitialize(__src);
+}
+
+template <class _Tp>
+_LIBCPP_HIDE_FROM_ABI remove_cv_t<_Tp> reloc_and_reclaim(_Tp* __src) {
+  _LIBCPP_ASSERT_NON_NULL(__src != nullptr, "null pointer given to reloc_and_reclaim");
+  return __builtin_reloc_and_reclaim(__src);
+}
+#  endif
+#endif
 
 // destroy_at
 

@@ -475,8 +475,37 @@ public:
   Value *VisitParenExpr(ParenExpr *PE) {
     return Visit(PE->getSubExpr());
   }
+  Value *VisitCXXRelocExpr(CXXRelocExpr *E) {
+    CGF.EmitRelocExprCleanupDeactivation(E);
+    return Visit(E->getOperand());
+  }
   Value *VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *E) {
     return Visit(E->getReplacement());
+  }
+  Value *VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+    if (E->isPreDecompositionAddress()) {
+      Address Addr = CGF.EmitLValue(E->getOperand()).getAddress();
+      return CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+          Addr.getBasePointer(), CGF.ConvertType(E->getType()));
+    }
+    return Visit(E->getOperand());
+  }
+  Value *VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+    Address Temp = CGF.CreateMemTemp(E->getType(), "reloc.result");
+    CGF.EmitCXXRelocateExpr(
+        E, AggValueSlot::forAddr(Temp, E->getType().getQualifiers(),
+                                 AggValueSlot::IsNotDestructed,
+                                 AggValueSlot::DoesNotNeedGCBarriers,
+                                 AggValueSlot::IsNotAliased,
+                                 AggValueSlot::MayOverlap));
+    return CGF.EmitLoadOfScalar(Temp, /*Volatile=*/false, E->getType(),
+                                E->getExprLoc());
+  }
+  Value *VisitCXXImplicitDecompositionExpr(CXXImplicitDecompositionExpr *E) {
+    CGF.EnterImplicitDecomposition(E);
+    Value *Result = Visit(E->getOperand());
+    CGF.LeaveImplicitDecomposition(E);
+    return Result;
   }
   Value *VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     return Visit(GE->getResultExpr());

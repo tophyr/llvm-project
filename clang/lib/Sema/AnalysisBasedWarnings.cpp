@@ -48,6 +48,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -2670,6 +2671,326 @@ static bool areAnyEnabled(DiagnosticsEngine &D, SourceLocation Loc,
   return (!D.isIgnored(Diags, Loc) || ...);
 }
 
+namespace {
+
+using RelocationState = sema::RelocationState;
+using RelocationUseSite = sema::RelocationUseSite;
+using RelocationEvent = sema::RelocationEvent;
+using BooleanFactMap = llvm::DenseMap<const ValueDecl *, bool>;
+
+struct RelocationAnalysisState {
+  RelocationState Relocations;
+  BooleanFactMap BooleanFacts;
+};
+
+static bool sameRelocationState(const RelocationState &A,
+                                const RelocationState &B) {
+  if (A.RelocatedDecls.size() != B.RelocatedDecls.size() ||
+      A.RelocatedSubobjects.size() != B.RelocatedSubobjects.size())
+    return false;
+
+  for (const auto &[Decl, Loc] : A.RelocatedDecls) {
+    auto It = B.RelocatedDecls.find(Decl);
+    if (It == B.RelocatedDecls.end() || It->second != Loc)
+      return false;
+  }
+
+  for (const auto &[Decl, Subobjects] : A.RelocatedSubobjects) {
+    auto It = B.RelocatedSubobjects.find(Decl);
+    if (It == B.RelocatedSubobjects.end() ||
+        It->second.size() != Subobjects.size())
+      return false;
+    for (const auto &[Subobject, Loc] : Subobjects) {
+      auto SubIt = It->second.find(Subobject);
+      if (SubIt == It->second.end() || SubIt->second != Loc)
+        return false;
+    }
+  }
+
+  return true;
+}
+
+static bool sameBooleanFacts(const BooleanFactMap &A, const BooleanFactMap &B) {
+  if (A.size() != B.size())
+    return false;
+
+  for (const auto &[Decl, Value] : A) {
+    auto It = B.find(Decl);
+    if (It == B.end() || It->second != Value)
+      return false;
+  }
+
+  return true;
+}
+
+static bool sameRelocationAnalysisState(const RelocationAnalysisState &A,
+                                        const RelocationAnalysisState &B) {
+  return sameRelocationState(A.Relocations, B.Relocations) &&
+         sameBooleanFacts(A.BooleanFacts, B.BooleanFacts);
+}
+
+using RelocationStateSet = SmallVector<RelocationAnalysisState, 2>;
+
+static bool sameRelocationStateSet(const RelocationStateSet &A,
+                                   const RelocationStateSet &B) {
+  if (A.size() != B.size())
+    return false;
+
+  for (const auto &StateA : A) {
+    bool Found = false;
+    for (const auto &StateB : B) {
+      if (sameRelocationAnalysisState(StateA, StateB)) {
+        Found = true;
+        break;
+      }
+    }
+    if (!Found)
+      return false;
+  }
+
+  return true;
+}
+
+static void addRelocationState(RelocationStateSet &States,
+                               RelocationAnalysisState State) {
+  for (const auto &Existing : States)
+    if (sameRelocationAnalysisState(Existing, State))
+      return;
+  States.push_back(std::move(State));
+}
+
+static void applyRelocationEvent(RelocationState &State,
+                                 const RelocationEvent &Event) {
+  if (Event.Subobject)
+    State.RelocatedSubobjects[Event.Root].try_emplace(Event.Subobject,
+                                                      Event.Loc);
+  else
+    State.RelocatedDecls.try_emplace(Event.Root, Event.Loc);
+}
+
+static bool extractBooleanFact(const Expr *E, bool KnownValue,
+                               const ValueDecl *&Decl, bool &Value) {
+  E = E ? E->IgnoreParenImpCasts() : nullptr;
+  if (!E)
+    return false;
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl());
+    if (!VD || !VD->getType()->isBooleanType())
+      return false;
+    Decl = VD;
+    Value = KnownValue;
+    return true;
+  }
+
+  if (const auto *UO = dyn_cast<UnaryOperator>(E);
+      UO && UO->getOpcode() == UO_LNot)
+    return extractBooleanFact(UO->getSubExpr(), !KnownValue, Decl, Value);
+
+  if (const auto *BO = dyn_cast<BinaryOperator>(E)) {
+    if (BO->getOpcode() == BO_LOr && !KnownValue)
+      return extractBooleanFact(BO->getLHS(), /*KnownValue=*/false, Decl,
+                                Value);
+    if (BO->getOpcode() == BO_LAnd && KnownValue)
+      return extractBooleanFact(BO->getLHS(), /*KnownValue=*/true, Decl,
+                                Value);
+  }
+
+  return false;
+}
+
+static std::optional<bool> evaluateBooleanCondition(const Expr *E,
+                                                    const BooleanFactMap &Facts) {
+  E = E ? E->IgnoreParenImpCasts() : nullptr;
+  if (!E)
+    return std::nullopt;
+
+  if (const auto *BL = dyn_cast<CXXBoolLiteralExpr>(E))
+    return BL->getValue();
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl());
+    if (!VD)
+      return std::nullopt;
+    auto It = Facts.find(VD);
+    return It == Facts.end() ? std::nullopt : std::optional<bool>(It->second);
+  }
+
+  if (const auto *UO = dyn_cast<UnaryOperator>(E);
+      UO && UO->getOpcode() == UO_LNot) {
+    if (auto Value = evaluateBooleanCondition(UO->getSubExpr(), Facts))
+      return !*Value;
+  }
+
+  return std::nullopt;
+}
+
+static bool augmentStateForSuccessorEdge(RelocationAnalysisState &State,
+                                         const CFGBlock *Pred,
+                                         const CFGBlock *Succ) {
+  if (!Pred || Pred->succ_size() != 2)
+    return true;
+
+  unsigned SuccIndex = 0;
+  bool FoundSucc = false;
+  for (const CFGBlock *Candidate : Pred->succs()) {
+    if (Candidate == Succ) {
+      FoundSucc = true;
+      break;
+    }
+    ++SuccIndex;
+  }
+  if (!FoundSucc)
+    return false;
+
+  const auto *Cond =
+      dyn_cast_or_null<Expr>(Pred->getTerminatorCondition(/*StripParens=*/true));
+  if (!Cond)
+    return true;
+
+  bool EdgeValue = SuccIndex == 0;
+  if (auto KnownValue = evaluateBooleanCondition(Cond, State.BooleanFacts))
+    if (*KnownValue != EdgeValue)
+      return false;
+
+  const ValueDecl *Decl = nullptr;
+  bool FactValue = false;
+  if (extractBooleanFact(Cond, EdgeValue, Decl, FactValue))
+    State.BooleanFacts[Decl] = FactValue;
+
+  return true;
+}
+
+static SourceLocation getRelocationLoc(const RelocationState &State,
+                                       const RelocationUseSite &Use) {
+  if (Use.Subobject) {
+    auto It = State.RelocatedSubobjects.find(Use.Root);
+    if (It == State.RelocatedSubobjects.end())
+      return SourceLocation();
+    auto SubIt = It->second.find(Use.Subobject);
+    return SubIt == It->second.end() ? SourceLocation() : SubIt->second;
+  }
+
+  auto It = State.RelocatedDecls.find(Use.Root);
+  return It == State.RelocatedDecls.end() ? SourceLocation() : It->second;
+}
+
+static void checkRelocatedUses(Sema &S, AnalysisDeclContext &AC,
+                               sema::FunctionScopeInfo *FSI) {
+  if (FSI->getRelocationUseSites().empty() ||
+      FSI->getRelocationEvents().empty())
+    return;
+
+  CFG *Cfg = AC.getCFG();
+  if (!Cfg)
+    return;
+
+  llvm::DenseMap<const Stmt *, SmallVector<RelocationUseSite, 1>> UsesByStmt;
+  llvm::DenseMap<const Stmt *, SmallVector<RelocationEvent, 1>> EventsByStmt;
+  for (const auto &Use : FSI->getRelocationUseSites())
+    if (Use.Site)
+      UsesByStmt[Use.Site].push_back(Use);
+  for (const auto &Event : FSI->getRelocationEvents())
+    if (Event.Site)
+      EventsByStmt[Event.Site].push_back(Event);
+
+  llvm::DenseMap<const CFGBlock *, RelocationStateSet> EntryState;
+  llvm::DenseMap<const CFGBlock *, RelocationStateSet> ExitState;
+  llvm::DenseSet<const CFGBlock *> Reachable;
+
+  ForwardDataflowWorklist Worklist(*Cfg, AC);
+  Worklist.enqueueBlock(&Cfg->getEntry());
+  while (const CFGBlock *Block = Worklist.dequeue()) {
+    RelocationStateSet InStates;
+    if (Block == &Cfg->getEntry()) {
+      addRelocationState(InStates, RelocationAnalysisState());
+    } else {
+      for (const CFGBlock *Pred : Block->preds()) {
+        if (!Pred || !Reachable.contains(Pred))
+          continue;
+        auto ExitIt = ExitState.find(Pred);
+        if (ExitIt == ExitState.end())
+          continue;
+        for (const auto &PredState : ExitIt->second) {
+          RelocationAnalysisState EdgeState = PredState;
+          if (!augmentStateForSuccessorEdge(EdgeState, Pred, Block))
+            continue;
+          addRelocationState(InStates, std::move(EdgeState));
+        }
+      }
+    }
+    if (InStates.empty())
+      continue;
+
+    Reachable.insert(Block);
+    auto EntryIt = EntryState.find(Block);
+    if (EntryIt != EntryState.end() &&
+        sameRelocationStateSet(EntryIt->second, InStates))
+      continue;
+    EntryState[Block] = InStates;
+
+    RelocationStateSet OutStates = InStates;
+    for (const CFGElement &Elt : *Block) {
+      auto CS = Elt.getAs<CFGStmt>();
+      if (!CS)
+        continue;
+      const Stmt *Stmt = CS->getStmt();
+      if (auto It = EventsByStmt.find(Stmt); It != EventsByStmt.end())
+        for (auto &State : OutStates)
+          for (const auto &Event : It->second)
+            applyRelocationEvent(State.Relocations, Event);
+    }
+
+    auto ExitIt = ExitState.find(Block);
+    if (ExitIt == ExitState.end() ||
+        !sameRelocationStateSet(ExitIt->second, OutStates)) {
+      ExitState[Block] = OutStates;
+      Worklist.enqueueSuccessors(Block);
+    }
+  }
+
+  llvm::DenseSet<const Stmt *> Diagnosed;
+  for (const CFGBlock *Block : *Cfg) {
+    if (!Reachable.contains(Block))
+      continue;
+
+    RelocationStateSet States = EntryState[Block];
+    for (const CFGElement &Elt : *Block) {
+      auto CS = Elt.getAs<CFGStmt>();
+      if (!CS)
+        continue;
+      const Stmt *Stmt = CS->getStmt();
+
+      if (auto It = UsesByStmt.find(Stmt); It != UsesByStmt.end() &&
+          Diagnosed.insert(Stmt).second) {
+        for (const auto &Use : It->second) {
+          for (const auto &State : States) {
+            SourceLocation RelocLoc =
+                getRelocationLoc(State.Relocations, Use);
+            if (RelocLoc.isInvalid())
+              continue;
+            if (Use.Subobject)
+              S.Diag(Use.Loc, diag::err_use_after_reloc_subobject)
+                  << Use.Subobject << Use.Root;
+            else
+              S.Diag(Use.Loc, diag::err_use_after_reloc) << Use.Root;
+            S.Diag(RelocLoc, diag::note_relocated_here);
+            goto next_stmt;
+          }
+        }
+      }
+
+      if (auto It = EventsByStmt.find(Stmt); It != EventsByStmt.end())
+        for (auto &State : States)
+          for (const auto &Event : It->second)
+            applyRelocationEvent(State.Relocations, Event);
+    next_stmt:;
+    }
+  }
+}
+
+} // namespace
+
 sema::AnalysisBasedWarnings::AnalysisBasedWarnings(Sema &s)
     : S(s), IPData(std::make_unique<InterProceduralData>()),
       NumFunctionsAnalyzed(0), NumFunctionsWithBadCFGs(0), NumCFGBlocks(0),
@@ -2836,18 +3157,23 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
   // (2) The code already has problems; running the analysis just takes more
   //     time.
   DiagnosticsEngine &Diags = S.getDiagnostics();
-
-  // Do not do any analysis if we are going to just ignore them.
-  if (Diags.getIgnoreAllWarnings() ||
+  bool HasRelocationChecks = !fscope->getRelocationEvents().empty();
+  bool SkipWarnings =
+      Diags.getIgnoreAllWarnings() ||
       (Diags.getSuppressSystemWarnings() &&
-       S.SourceMgr.isInSystemHeader(D->getLocation())))
+       S.SourceMgr.isInSystemHeader(D->getLocation()));
+
+  // Do not do any analysis if we are going to just ignore them and there are
+  // no relocation lifetime errors to check.
+  if (SkipWarnings && !HasRelocationChecks)
     return;
 
   // For code in dependent contexts, we'll do this at instantiation time.
   if (cast<DeclContext>(D)->isDependentContext())
     return;
 
-  if (S.hasUncompilableErrorOccurred()) {
+  if ((S.hasUncompilableErrorOccurred() || fscope->hasAnyErrorOccurred(Diags)) &&
+      !HasRelocationChecks) {
     // Flush out any possibly unreachable diagnostics.
     flushDiagnostics(S, fscope);
     return;
@@ -2891,6 +3217,13 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
       .setAlwaysAdd(Stmt::UnaryOperatorClass);
   }
 
+  for (const auto &Use : fscope->getRelocationUseSites())
+    if (Use.Site)
+      AC.registerForcedBlockExpression(Use.Site);
+  for (const auto &Event : fscope->getRelocationEvents())
+    if (Event.Site)
+      AC.registerForcedBlockExpression(Event.Site);
+
   bool EnableLifetimeSafetyAnalysis = S.getLangOpts().EnableLifetimeSafety;
   // Install the logical handler.
   std::optional<LogicalErrorHandler> LEH;
@@ -2900,7 +3233,7 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
   }
 
   // Emit delayed diagnostics.
-  if (!fscope->PossiblyUnreachableDiags.empty()) {
+  if (!SkipWarnings && !fscope->PossiblyUnreachableDiags.empty()) {
     bool analyzed = false;
 
     // Register the expressions with the CFGBuilder.
@@ -2940,8 +3273,10 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
       flushDiagnostics(S, fscope);
   }
 
+  checkRelocatedUses(S, AC, fscope);
+
   // Warning: check missing 'return'
-  if (P.enableCheckFallThrough) {
+  if (!SkipWarnings && P.enableCheckFallThrough) {
     const CheckFallThroughDiagnostics &CD =
         (isa<BlockDecl>(D) ? CheckFallThroughDiagnostics::MakeForBlock()
          : (isa<CXXMethodDecl>(D) &&
@@ -2955,7 +3290,7 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
   }
 
   // Warning: check for unreachable code
-  if (P.enableCheckUnreachable) {
+  if (!SkipWarnings && P.enableCheckUnreachable) {
     // Only check for unreachable code on non-template instantiations.
     // Different template instantiations can effectively change the control-flow
     // and it is very difficult to prove that a snippet of code in a template
@@ -2968,7 +3303,7 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
   }
 
   // Check for thread safety violations
-  if (P.enableThreadSafetyAnalysis) {
+  if (!SkipWarnings && P.enableThreadSafetyAnalysis) {
     SourceLocation FL = AC.getDecl()->getLocation();
     SourceLocation FEL = AC.getDecl()->getEndLoc();
     threadSafety::ThreadSafetyReporter Reporter(S, FL, FEL);
@@ -2983,17 +3318,18 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
   }
 
   // Check for violations of consumed properties.
-  if (P.enableConsumedAnalysis) {
+  if (!SkipWarnings && P.enableConsumedAnalysis) {
     consumed::ConsumedWarningsHandler WarningHandler(S);
     consumed::ConsumedAnalyzer Analyzer(WarningHandler);
     Analyzer.run(AC);
   }
 
-  if (!Diags.isIgnored(diag::warn_uninit_var, D->getBeginLoc()) ||
+  if (!SkipWarnings &&
+      (!Diags.isIgnored(diag::warn_uninit_var, D->getBeginLoc()) ||
       !Diags.isIgnored(diag::warn_sometimes_uninit_var, D->getBeginLoc()) ||
       !Diags.isIgnored(diag::warn_maybe_uninit_var, D->getBeginLoc()) ||
       !Diags.isIgnored(diag::warn_uninit_const_reference, D->getBeginLoc()) ||
-      !Diags.isIgnored(diag::warn_uninit_const_pointer, D->getBeginLoc())) {
+      !Diags.isIgnored(diag::warn_uninit_const_pointer, D->getBeginLoc()))) {
     if (CFG *cfg = AC.getCFG()) {
       UninitValsDiagReporter reporter(S);
       UninitVariablesAnalysisStats stats;
@@ -3017,12 +3353,12 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
 
   // TODO: Enable lifetime safety analysis for other languages once it is
   // stable.
-  if (EnableLifetimeSafetyAnalysis && S.getLangOpts().CPlusPlus) {
+  if (!SkipWarnings && EnableLifetimeSafetyAnalysis && S.getLangOpts().CPlusPlus) {
     if (CFG *cfg = AC.getCFG())
       runLifetimeSafetyAnalysis(*cast<DeclContext>(D), *cfg, AC);
   }
   // Check for violations of "called once" parameter properties.
-  if (S.getLangOpts().ObjC && !S.getLangOpts().CPlusPlus &&
+  if (!SkipWarnings && S.getLangOpts().ObjC && !S.getLangOpts().CPlusPlus &&
       shouldAnalyzeCalledOnceParameters(Diags, D->getBeginLoc())) {
     if (AC.getCFG()) {
       CalledOnceCheckReporter Reporter(S, IPData->CalledOnceData);
@@ -3036,12 +3372,13 @@ void clang::sema::AnalysisBasedWarnings::IssueWarnings(
       !Diags.isIgnored(diag::warn_unannotated_fallthrough, D->getBeginLoc());
   bool FallThroughDiagPerFunction = !Diags.isIgnored(
       diag::warn_unannotated_fallthrough_per_function, D->getBeginLoc());
-  if (FallThroughDiagFull || FallThroughDiagPerFunction ||
-      fscope->HasFallthroughStmt) {
+  if (!SkipWarnings &&
+      (FallThroughDiagFull || FallThroughDiagPerFunction ||
+       fscope->HasFallthroughStmt)) {
     DiagnoseSwitchLabelsFallthrough(S, AC, !FallThroughDiagFull);
   }
 
-  if (S.getLangOpts().ObjCWeak &&
+  if (!SkipWarnings && S.getLangOpts().ObjCWeak &&
       !Diags.isIgnored(diag::warn_arc_repeated_use_of_weak, D->getBeginLoc()))
     diagnoseRepeatedUseOfWeak(S, fscope, D, AC.getParentMap());
 

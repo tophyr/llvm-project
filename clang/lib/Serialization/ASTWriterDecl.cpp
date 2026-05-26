@@ -1304,6 +1304,7 @@ void ASTDeclWriter::VisitVarDecl(VarDecl *D) {
     VarDeclBits.addBit(D->isInlineSpecified());
     VarDeclBits.addBit(D->isConstexpr());
     VarDeclBits.addBit(D->isInitCapture());
+    VarDeclBits.addBit(D->isRelocObject());
     VarDeclBits.addBit(D->isPreviousDeclInSameBlockScope());
 
     VarDeclBits.addBit(D->isEscapingByref());
@@ -1354,7 +1355,8 @@ void ASTDeclWriter::VisitVarDecl(VarDecl *D) {
       D->getDeclName().getNameKind() == DeclarationName::Identifier &&
       !D->hasExtInfo() && D->getFirstDecl() == D->getMostRecentDecl() &&
       D->getKind() == Decl::Var && !D->isInline() && !D->isConstexpr() &&
-      !D->isInitCapture() && !D->isPreviousDeclInSameBlockScope() &&
+      !D->isInitCapture() && !D->isRelocObject() &&
+      !D->isPreviousDeclInSameBlockScope() &&
       !D->hasInitWithSideEffects() && !D->isEscapingByref() &&
       !HasDeducedType && D->getStorageDuration() != SD_Static &&
       !D->getDescribedVarTemplate() && !D->getMemberSpecializationInfo() &&
@@ -1384,6 +1386,7 @@ void ASTDeclWriter::VisitParmVarDecl(ParmVarDecl *D) {
   // FIXME: stable encoding
   ParmVarDeclBits.addBits(D->getObjCDeclQualifier(), /*BitsWidth=*/7);
   ParmVarDeclBits.addBit(D->isKNRPromoted());
+  ParmVarDeclBits.addBit(D->isRelocParameter());
   ParmVarDeclBits.addBit(D->hasInheritedDefaultArg());
   ParmVarDeclBits.addBit(D->hasUninstantiatedDefaultArg());
   ParmVarDeclBits.addBit(D->getExplicitObjectParamThisLoc().isValid());
@@ -2672,9 +2675,10 @@ void ASTWriter::WriteDeclAbbrevs() {
   Abv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // ScopeIndex
   Abv->Add(BitCodeAbbrevOp(
       BitCodeAbbrevOp::Fixed,
-      19)); // Packed Parm Var Decl bits: IsObjCMethodParameter, ScopeDepth,
-            // ObjCDeclQualifier, KNRPromoted,
-            // HasInheritedDefaultArg, HasUninstantiatedDefaultArg
+      20)); // Packed Parm Var Decl bits: IsObjCMethodParameter, ScopeDepth,
+            // ObjCDeclQualifier, KNRPromoted, IsRelocParameter,
+            // HasInheritedDefaultArg, HasUninstantiatedDefaultArg,
+            // HasExplicitObjectParameter
   // Type Source Info
   Abv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
   Abv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6)); // TypeLoc
@@ -2732,12 +2736,13 @@ void ASTWriter::WriteDeclAbbrevs() {
   // VarDecl
   Abv->Add(BitCodeAbbrevOp(
       BitCodeAbbrevOp::Fixed,
-      22)); // Packed Var Decl bits:  Linkage, ModulesCodegen,
+      23)); // Packed Var Decl bits:  Linkage, ModulesCodegen,
             // SClass, TSCSpec, InitStyle,
             // isARCPseudoStrong, IsThisDeclarationADemotedDefinition,
             // isExceptionVariable, isNRVOVariable, isCXXForRangeDecl,
             // isInline, isInlineSpecified, isConstexpr,
-            // isInitCapture, isPrevDeclInSameScope, hasInitWithSideEffects,
+            // isInitCapture, isRelocObject, isPrevDeclInSameScope,
+            // hasInitWithSideEffects,
             // EscapingByref, HasDeducedType, ImplicitParamKind, isObjCForDecl
             // IsCXXForRangeImplicitVar
   Abv->Add(BitCodeAbbrevOp(0));                         // VarKind (local enum)

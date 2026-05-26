@@ -2279,6 +2279,30 @@ void StmtProfiler::VisitCXXNoexceptExpr(const CXXNoexceptExpr *S) {
   VisitExpr(S);
 }
 
+void StmtProfiler::VisitCXXDecomposedObjectExpr(
+    const CXXDecomposedObjectExpr *S) {
+  VisitExpr(S);
+  ID.AddInteger(S->getAccessKind());
+  ID.AddBoolean(S->isDirectBaseSubobject());
+  ID.AddBoolean(S->isVirtualBaseSubobject());
+  if (const auto *TD = S->getBaseTypeDecl())
+    VisitDecl(TD);
+}
+
+void StmtProfiler::VisitCXXRelocExpr(const CXXRelocExpr *S) { VisitExpr(S); }
+
+void StmtProfiler::VisitCXXRelocateExpr(const CXXRelocateExpr *S) {
+  VisitExpr(S);
+  ID.AddBoolean(S->isReclaiming());
+  if (const auto *FD = S->getOperatorDelete())
+    VisitDecl(FD);
+}
+
+void StmtProfiler::VisitCXXImplicitDecompositionExpr(
+    const CXXImplicitDecompositionExpr *S) {
+  VisitExpr(S);
+}
+
 void StmtProfiler::VisitPackExpansionExpr(const PackExpansionExpr *S) {
   VisitExpr(S);
 }

@@ -22,6 +22,7 @@
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/EnterExpressionEvaluationContext.h"
 #include "clang/Sema/Scope.h"
+#include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaCodeCompletion.h"
 #include "clang/Sema/SemaObjC.h"
 #include "clang/Sema/SemaOpenACC.h"
@@ -1493,6 +1494,7 @@ StmtResult Parser::ParseIfStatement(SourceLocation *TrailingElseLoc) {
   ParseScope InnerScope(this, Scope::DeclScope, C99orCXX, IsBracedThen);
 
   MisleadingIndentationChecker MIChecker(*this, MSK_if, IfLoc);
+  auto PreIfRelocationState = Actions.getCurrentFunctionRelocationState();
 
   // Read the 'then' stmt.
   SourceLocation ThenStmtLoc = Tok.getLocation();
@@ -1513,6 +1515,7 @@ StmtResult Parser::ParseIfStatement(SourceLocation *TrailingElseLoc) {
         Sema::ExpressionEvaluationContextRecord::EK_Other, ShouldEnter);
     ThenStmt = ParseStatement(&InnerStatementTrailingElseLoc);
   }
+  auto ThenRelocationState = Actions.getCurrentFunctionRelocationState();
 
   if (Tok.isNot(tok::kw_else))
     MIChecker.Check();
@@ -1524,8 +1527,11 @@ StmtResult Parser::ParseIfStatement(SourceLocation *TrailingElseLoc) {
   SourceLocation ElseLoc;
   SourceLocation ElseStmtLoc;
   StmtResult ElseStmt;
+  bool HasElse = false;
 
   if (Tok.is(tok::kw_else)) {
+    HasElse = true;
+    Actions.setCurrentFunctionRelocationState(PreIfRelocationState);
     if (TrailingElseLoc)
       *TrailingElseLoc = Tok.getLocation();
 
@@ -1557,9 +1563,20 @@ StmtResult Parser::ParseIfStatement(SourceLocation *TrailingElseLoc) {
         Actions, Context, nullptr,
         Sema::ExpressionEvaluationContextRecord::EK_Other, ShouldEnter);
     ElseStmt = ParseStatement();
+    auto ElseRelocationState = Actions.getCurrentFunctionRelocationState();
 
     if (ElseStmt.isUsable())
       MIChecker.Check();
+
+    if (ConstexprCondition) {
+      if (*ConstexprCondition)
+        Actions.setCurrentFunctionRelocationState(ThenRelocationState);
+      else
+        Actions.setCurrentFunctionRelocationState(ElseRelocationState);
+    } else {
+      Actions.setCurrentFunctionRelocationState(ThenRelocationState);
+      Actions.intersectCurrentFunctionRelocationState(ElseRelocationState);
+    }
 
     // Pop the 'else' scope if needed.
     InnerScope.Exit();
@@ -1569,6 +1586,13 @@ StmtResult Parser::ParseIfStatement(SourceLocation *TrailingElseLoc) {
     return StmtError();
   } else if (InnerStatementTrailingElseLoc.isValid()) {
     Diag(InnerStatementTrailingElseLoc, diag::warn_dangling_else);
+  }
+
+  if (!HasElse) {
+    if (ConstexprCondition && *ConstexprCondition)
+      Actions.setCurrentFunctionRelocationState(ThenRelocationState);
+    else
+      Actions.setCurrentFunctionRelocationState(PreIfRelocationState);
   }
 
   IfScope.Exit();

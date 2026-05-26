@@ -204,6 +204,7 @@ class DelayedDiagnostic;
 class DelayedDiagnosticPool;
 class FunctionScopeInfo;
 class LambdaScopeInfo;
+struct RelocationState;
 class SemaPPCallbacks;
 class TemplateDeductionInfo;
 } // namespace sema
@@ -3138,6 +3139,12 @@ public:
                                StringRef Keyword);
   ExprResult ActOnCoawaitExpr(Scope *S, SourceLocation KwLoc, Expr *E);
   ExprResult ActOnCoyieldExpr(Scope *S, SourceLocation KwLoc, Expr *E);
+  ExprResult ActOnRelocExpr(Scope *S, SourceLocation KwLoc, Expr *E);
+  bool DiagnoseUseOfRelocatedValue(const ValueDecl *D, SourceLocation Loc);
+  void RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                           SourceLocation Loc);
+  void RecordRelocationUse(const Stmt *Site, const ValueDecl *D,
+                           const NamedDecl *Subobject, SourceLocation Loc);
   StmtResult ActOnCoreturnStmt(Scope *S, SourceLocation KwLoc, Expr *E);
 
   ExprResult BuildOperatorCoawaitLookupExpr(Scope *S, SourceLocation Loc);
@@ -5560,6 +5567,14 @@ public:
   /// declared.
   CXXConstructorDecl *DeclareImplicitMoveConstructor(CXXRecordDecl *ClassDecl);
 
+  /// Declare the implicit relocation constructor for the given class.
+  CXXConstructorDecl *DeclareImplicitRelocationConstructor(
+      CXXRecordDecl *ClassDecl);
+
+  /// Declare the hidden virtual slicing function for the given class.
+  CXXMethodDecl *DeclareImplicitVirtualSlicingFunction(
+      CXXRecordDecl *ClassDecl);
+
   /// DefineImplicitMoveConstructor - Checks for feasibility of
   /// defining this constructor as the move constructor.
   void DefineImplicitMoveConstructor(SourceLocation CurrentLocation,
@@ -5585,6 +5600,9 @@ public:
   /// \returns The implicitly-declared move assignment operator, or NULL if it
   /// wasn't declared.
   CXXMethodDecl *DeclareImplicitMoveAssignment(CXXRecordDecl *ClassDecl);
+
+  /// Declare the implicit relocation assignment operator for the given class.
+  CXXMethodDecl *DeclareImplicitRelocationAssignment(CXXRecordDecl *ClassDecl);
 
   /// Defines an implicitly-declared move assignment operator.
   void DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
@@ -6769,6 +6787,7 @@ public:
     /// to handle differently.
     enum ExpressionKind {
       EK_Decltype,
+      EK_Typeid,
       EK_TemplateArgument,
       EK_AttrArgument,
       EK_VariableInit,
@@ -7263,6 +7282,10 @@ public:
   // Binary/Unary Operators.  'Tok' is the token for the operator.
   ExprResult CreateBuiltinUnaryOp(SourceLocation OpLoc, UnaryOperatorKind Opc,
                                   Expr *InputExpr, bool IsAfterAmp = false);
+  sema::RelocationState getCurrentFunctionRelocationState() const;
+  void setCurrentFunctionRelocationState(const sema::RelocationState &State);
+  void intersectCurrentFunctionRelocationState(
+      const sema::RelocationState &State);
   ExprResult BuildUnaryOp(Scope *S, SourceLocation OpLoc, UnaryOperatorKind Opc,
                           Expr *Input, bool IsAfterAmp = false);
 
@@ -7963,6 +7986,7 @@ public:
       SourceLocation CallLoc, FunctionDecl *FDecl,
       const FunctionProtoType *Proto, unsigned FirstParam,
       ArrayRef<Expr *> Args, SmallVectorImpl<Expr *> &AllArgs,
+      Expr *CalleeExpr = nullptr,
       VariadicCallType CallType = VariadicCallType::DoesNotApply,
       bool AllowExplicit = false, bool IsListInitialization = false);
 
@@ -9508,6 +9532,11 @@ public:
   ///
   /// \returns The destructor for this class.
   CXXDestructorDecl *LookupDestructor(CXXRecordDecl *Class);
+
+  /// Determine whether the current context has private access privileges to
+  /// the given class.
+  bool HasPrivateAccessToClass(SourceLocation Loc, CXXRecordDecl *Class,
+                               DeclContext *UseDC = nullptr);
 
   /// Force the declaration of any implicitly-declared members of this
   /// class.

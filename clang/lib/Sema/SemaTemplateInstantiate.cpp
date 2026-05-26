@@ -3360,6 +3360,7 @@ Sema::SubstParmVarDecl(ParmVarDecl *OldParm,
   NewParm->setExplicitObjectParameterLoc(
       OldParm->getExplicitObjectParamThisLoc());
   NewParm->setHasInheritedDefaultArg(OldParm->hasInheritedDefaultArg());
+  NewParm->setIsRelocParameter(OldParm->isRelocParameter());
 
   if (OldParm->isParameterPack() && !NewParm->isParameterPack()) {
     // Add the new parameter to the instantiated parameter pack.

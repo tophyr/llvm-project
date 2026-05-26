@@ -2623,6 +2623,31 @@ void StmtPrinter::VisitCXXNoexceptExpr(CXXNoexceptExpr *E) {
   OS << ")";
 }
 
+void StmtPrinter::VisitCXXRelocExpr(CXXRelocExpr *E) {
+  OS << "reloc ";
+  PrintExpr(E->getOperand());
+}
+
+void StmtPrinter::VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+  OS << (E->isReclaiming() ? "__builtin_reloc_and_reclaim("
+                           : "__builtin_reloc_and_uninitialize(");
+  PrintExpr(E->getOperand());
+  OS << ')';
+}
+
+void StmtPrinter::VisitCXXImplicitDecompositionExpr(
+    CXXImplicitDecompositionExpr *E) {
+  PrintExpr(E->getOperand());
+}
+
+void StmtPrinter::VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+  PrintExpr(E->getOperand());
+  if (E->isBaseSubobject())
+    OS << '.' << E->getBaseTypeDecl()->getName();
+  else if (E->isPreDecompositionAddress())
+    OS << ".this";
+}
+
 void StmtPrinter::VisitPackExpansionExpr(PackExpansionExpr *E) {
   PrintExpr(E->getPattern());
   OS << "...";

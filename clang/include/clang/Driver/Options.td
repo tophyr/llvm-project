@@ -1653,6 +1653,13 @@ defm coro_aligned_allocation : BoolFOption<"coro-aligned-allocation",
           "Prefer aligned allocation for C++ Coroutines">,
   NegFlag<SetFalse>>;
 
+// C++ Relocation (P2785R4)
+defm relocation : BoolFOption<"relocation",
+  LangOpts<"Relocation">, DefaultFalse,
+  PosFlag<SetTrue, [], [ClangOption, CC1Option],
+          "Enable support for C++ relocation (P2785R4)">,
+  NegFlag<SetFalse>>;
+
 defm experimental_library : BoolFOption<"experimental-library",
   LangOpts<"ExperimentalLibrary">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option, CLOption],

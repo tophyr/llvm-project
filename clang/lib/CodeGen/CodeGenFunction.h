@@ -1538,6 +1538,11 @@ private:
   llvm::DenseMap<const ParmVarDecl *, EHScopeStack::stable_iterator>
       CalleeDestructedParamCleanups;
 
+  // Keep track of the destruction cleanups for local variables so that
+  // lifetime-ending operations such as 'reloc' can deactivate them early.
+  llvm::DenseMap<const VarDecl *, EHScopeStack::stable_iterator>
+      LocalVarCleanups;
+
   /// SizeArguments - If a ParmVarDecl had the pass_object_size attribute, this
   /// will contain a mapping from said ParmVarDecl to its implicit "object_size"
   /// parameter.
@@ -1550,6 +1555,8 @@ private:
 
   /// LabelMap - This keeps track of the LLVM basic block for each C label.
   llvm::DenseMap<const LabelDecl *, JumpDest> LabelMap;
+  llvm::DenseMap<const MaterializeTemporaryExpr *, const Expr *>
+      ActiveImplicitDecompositions;
 
   // BreakContinueStack - This keeps track of where break and continue
   // statements should jump to.
@@ -2380,6 +2387,7 @@ public:
   void EmitConstructorBody(FunctionArgList &Args);
   void EmitDestructorBody(FunctionArgList &Args);
   void emitImplicitAssignmentOperatorBody(FunctionArgList &Args);
+  void emitVirtualSlicingFunctionBody(FunctionArgList &Args);
   void EmitFunctionBody(const Stmt *Body);
   void EmitBlockWithFallThrough(llvm::BasicBlock *BB, const Stmt *S);
 
@@ -3471,6 +3479,17 @@ public:
   void EmitAutoVarCleanups(const AutoVarEmission &emission);
   void emitAutoVarTypeCleanup(const AutoVarEmission &emission,
                               QualType::DestructionKind dtorKind);
+  void DeactivateCleanupForRelocatedDecl(const ValueDecl *D);
+  void EmitRelocExprCleanupDeactivation(const CXXRelocExpr *E);
+  void EmitCXXRelocateExpr(const CXXRelocateExpr *E, AggValueSlot Dest);
+  void EmitRelocateToAddress(QualType ResultTy, Address DestAddr,
+                             llvm::Value *SrcPtr, QualType SrcPtrTy,
+                             bool Reclaim,
+                             const FunctionDecl *OperatorDelete = nullptr);
+  void EnterImplicitDecomposition(const CXXImplicitDecompositionExpr *E);
+  void LeaveImplicitDecomposition(const CXXImplicitDecompositionExpr *E);
+  const Expr *
+  getImplicitDecompositionOperand(const MaterializeTemporaryExpr *E) const;
 
   void MaybeEmitDeferredVarDeclInit(const VarDecl *var);
 

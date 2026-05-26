@@ -58,6 +58,61 @@ static bool functionHasPassObjectSizeParams(const FunctionDecl *FD) {
   });
 }
 
+static bool isRelocGlvalueArgument(Expr *Arg) {
+  const auto *RE = dyn_cast<CXXRelocExpr>(Arg->IgnoreParenImpCasts());
+  return RE && RE->getOperand()->isGLValue();
+}
+
+static const CXXDecomposedObjectExpr *getWholeDecomposedArg(Expr *Arg) {
+  const auto *DOE =
+      dyn_cast<CXXDecomposedObjectExpr>(Arg->IgnoreParenImpCasts());
+  return DOE && DOE->isWholeObject() ? DOE : nullptr;
+}
+
+static bool isRelocArgument(Expr *Arg) {
+  Arg = Arg->IgnoreParenImpCasts();
+  while (true) {
+    if (isa<CXXRelocExpr>(Arg))
+      return true;
+    if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(Arg)) {
+      Arg = MTE->getSubExpr()->IgnoreParenImpCasts();
+      continue;
+    }
+    if (const auto *BTE = dyn_cast<CXXBindTemporaryExpr>(Arg)) {
+      Arg = const_cast<Expr *>(BTE->getSubExpr()->IgnoreParenImpCasts());
+      continue;
+    }
+    return false;
+  }
+}
+
+static Expr *getOverloadArgForParameter(Sema &S, const FunctionDecl *Function,
+                                        unsigned ParamIndex, Expr *Arg) {
+  if (!Function || ParamIndex >= Function->getNumParams())
+    return Arg;
+
+  const auto *Param = Function->getParamDecl(ParamIndex);
+  if (Param->isRelocParameter()) {
+    const auto *DOE = getWholeDecomposedArg(Arg);
+    if (DOE)
+      return new (S.Context) CXXRelocExpr(Arg->getType(), Arg,
+                                          Arg->getExprLoc());
+    if (isa<CXXRelocExpr>(Arg->IgnoreParenImpCasts()))
+      return Arg;
+    return nullptr;
+  }
+
+  const auto *DOE = getWholeDecomposedArg(Arg);
+  if (!DOE)
+    return Arg;
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+      DRE && isa<BindingDecl>(DRE->getDecl()) &&
+      cast<BindingDecl>(DRE->getDecl())->isRelocDecompositionBinding())
+    return const_cast<Expr *>(DOE->getOperand());
+  return nullptr;
+}
+
 /// A convenience routine for creating a decayed reference to a function.
 static ExprResult CreateFunctionRefExpr(
     Sema &S, FunctionDecl *Fn, NamedDecl *FoundDecl, const Expr *Base,
@@ -245,6 +300,8 @@ void StandardConversionSequence::setAsIdentityConversion() {
   IsLvalueReference = true;
   BindsToFunctionLvalue = false;
   BindsToRvalue = false;
+  BindsToPrvalue = false;
+  FromRelocExpr = false;
   BindsImplicitObjectArgumentWithoutRefQualifier = false;
   ObjCLifetimeConversionBinding = false;
   FromBracedInitList = false;
@@ -1809,6 +1866,7 @@ TryImplicitConversion(Sema &S, Expr *From, QualType ToType,
     ICS.Standard.setAsIdentityConversion();
     ICS.Standard.setFromType(FromType);
     ICS.Standard.setAllToTypes(ToType);
+    ICS.Standard.FromRelocExpr = isRelocArgument(From);
 
     // We don't actually check at this point whether there is a valid
     // copy/move constructor, since overloading just assumes that it
@@ -4492,6 +4550,17 @@ isBetterReferenceBindingKind(const StandardConversionSequence &SCS1,
           !SCS2.IsLvalueReference && SCS2.BindsToFunctionLvalue);
 }
 
+static bool isBetterPrvalueValueBinding(const LangOptions &LangOpts,
+                                        const StandardConversionSequence &SCS1,
+                                        const StandardConversionSequence &SCS2) {
+  if (!LangOpts.Relocation)
+    return false;
+
+  return !SCS1.ReferenceBinding && SCS2.ReferenceBinding &&
+         (SCS2.BindsToPrvalue || SCS2.FromRelocExpr) &&
+         !SCS2.BindsImplicitObjectArgumentWithoutRefQualifier;
+}
+
 enum class FixedEnumPromotion {
   None,
   ToUnderlyingType,
@@ -4644,6 +4713,11 @@ CompareStandardConversionSequences(Sema &S, SourceLocation Loc,
     else if (isBetterReferenceBindingKind(SCS2, SCS1))
       return ImplicitConversionSequence::Worse;
   }
+
+  if (isBetterPrvalueValueBinding(S.getLangOpts(), SCS1, SCS2))
+    return ImplicitConversionSequence::Better;
+  if (isBetterPrvalueValueBinding(S.getLangOpts(), SCS2, SCS1))
+    return ImplicitConversionSequence::Worse;
 
   // Compare based on qualification conversions (C++ 13.3.3.2p3,
   // bullet 3).
@@ -5318,6 +5392,8 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.Standard.IsLvalueReference = !isRValRef;
     ICS.Standard.BindsToFunctionLvalue = T2->isFunctionType();
     ICS.Standard.BindsToRvalue = InitCategory.isRValue();
+    ICS.Standard.BindsToPrvalue = InitCategory.isPRValue();
+    ICS.Standard.FromRelocExpr = isRelocArgument(Init);
     ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.Standard.ObjCLifetimeConversionBinding =
         (RefConv & Sema::ReferenceConversions::ObjCLifetime) != 0;
@@ -5496,6 +5572,8 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.Standard.IsLvalueReference = !isRValRef;
     ICS.Standard.BindsToFunctionLvalue = false;
     ICS.Standard.BindsToRvalue = true;
+    ICS.Standard.BindsToPrvalue = InitCategory.isPRValue();
+    ICS.Standard.FromRelocExpr = isRelocArgument(Init);
     ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.Standard.ObjCLifetimeConversionBinding = false;
   } else if (ICS.isUserDefined()) {
@@ -5518,6 +5596,8 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.UserDefined.After.IsLvalueReference = !isRValRef;
     ICS.UserDefined.After.BindsToFunctionLvalue = false;
     ICS.UserDefined.After.BindsToRvalue = !LValRefType;
+    ICS.UserDefined.After.BindsToPrvalue =
+        InitCategory.isPRValue() && !LValRefType;
     ICS.UserDefined.After.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.UserDefined.After.ObjCLifetimeConversionBinding = false;
     ICS.UserDefined.After.FromBracedInitList = false;
@@ -6045,6 +6125,8 @@ static ImplicitConversionSequence TryObjectArgumentInitialization(
   ICS.Standard.IsLvalueReference = Method->getRefQualifier() != RQ_RValue;
   ICS.Standard.BindsToFunctionLvalue = false;
   ICS.Standard.BindsToRvalue = FromClassification.isRValue();
+  ICS.Standard.BindsToPrvalue = FromClassification.isPRValue();
+  ICS.Standard.FromRelocExpr = false;
   ICS.Standard.FromBracedInitList = false;
   ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier
     = (Method->getRefQualifier() == RQ_None);
@@ -7070,6 +7152,11 @@ void Sema::AddOverloadCandidate(
     // argument doesn't participate in overload resolution.
   }
 
+  if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(Function))
+    if (Ctor->isRelocationConstructor() &&
+        !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+      return;
+
   if (!CandidateSet.isNewCandidate(Function, PO))
     return;
 
@@ -7162,6 +7249,9 @@ void Sema::AddOverloadCandidate(
     //   of a class object to an object of its class type.
     QualType ClassType = Context.getTypeDeclType(Constructor->getParent());
     if (Args.size() == 1 && Constructor->isSpecializationCopyingObject() &&
+        !(isRelocGlvalueArgument(Args[0]) &&
+          Constructor->getNumParams() != 0 &&
+          Constructor->getParamDecl(0)->isRelocParameter()) &&
         (Context.hasSameUnqualifiedType(ClassType, Args[0]->getType()) ||
          IsDerivedFrom(Args[0]->getBeginLoc(), Args[0]->getType(),
                        ClassType))) {
@@ -7274,8 +7364,16 @@ void Sema::AddOverloadCandidate(
       if (ParamABI == ParameterABI::HLSLOut ||
           ParamABI == ParameterABI::HLSLInOut)
         ParamType = ParamType.getNonReferenceType();
+      Expr *Arg = getOverloadArgForParameter(*this, Function, ArgIdx, Args[ArgIdx]);
+      if (!Arg) {
+        Candidate.Conversions[ConvIdx].setBad(
+            BadConversionSequence::no_conversion, Args[ArgIdx], ParamType);
+        Candidate.Viable = false;
+        Candidate.FailureKind = ovl_fail_bad_conversion;
+        return;
+      }
       Candidate.Conversions[ConvIdx] = TryCopyInitialization(
-          *this, Args[ArgIdx], ParamType, SuppressUserConversions,
+          *this, Arg, ParamType, SuppressUserConversions,
           /*InOverloadResolution=*/true,
           /*AllowObjCWritebackConversion=*/
           getLangOpts().ObjCAutoRefCount, AllowExplicitConversions);
@@ -7686,6 +7784,10 @@ void Sema::AddMethodCandidate(
   assert(!isa<CXXConstructorDecl>(Method) &&
          "Use AddOverloadCandidate for constructors");
 
+  if (Method->isRelocationAssignmentOperator() &&
+      !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+    return;
+
   if (!CandidateSet.isNewCandidate(Method, PO))
     return;
 
@@ -7831,8 +7933,18 @@ void Sema::AddMethodCandidate(
       } else {
         ParamType = Proto->getParamType(ArgIdx + ExplicitOffset);
       }
+      Expr *Arg = getOverloadArgForParameter(*this, Method,
+                                             ArgIdx + ExplicitOffset,
+                                             Args[ArgIdx]);
+      if (!Arg) {
+        Candidate.Conversions[ConvIdx].setBad(
+            BadConversionSequence::no_conversion, Args[ArgIdx], ParamType);
+        Candidate.Viable = false;
+        Candidate.FailureKind = ovl_fail_bad_conversion;
+        return;
+      }
       Candidate.Conversions[ConvIdx]
-        = TryCopyInitialization(*this, Args[ArgIdx], ParamType,
+        = TryCopyInitialization(*this, Arg, ParamType,
                                 SuppressUserConversions,
                                 /*InOverloadResolution=*/true,
                                 /*AllowObjCWritebackConversion=*/
@@ -8074,6 +8186,18 @@ void Sema::AddTemplateOverloadCandidate(
     OverloadCandidateSet &CandidateSet, bool SuppressUserConversions,
     bool PartialOverloading, bool AllowExplicit, ADLCallKind IsADLCandidate,
     OverloadCandidateParamOrder PO, bool AggregateCandidateDeduction) {
+  if (const auto *Ctor =
+          dyn_cast<CXXConstructorDecl>(FunctionTemplate->getTemplatedDecl()))
+    if (Ctor->isRelocationConstructor() &&
+        !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+      return;
+
+  if (const auto *Method =
+          dyn_cast<CXXMethodDecl>(FunctionTemplate->getTemplatedDecl()))
+    if (Method->isRelocationAssignmentOperator() &&
+        !(Args.size() == 1 && isRelocGlvalueArgument(Args[0])))
+      return;
+
   if (!CandidateSet.isNewCandidate(FunctionTemplate, PO))
     return;
 
@@ -8212,8 +8336,14 @@ bool Sema::CheckNonDependentConversions(
       if (UserConversionFlag.OnlyInitializeNonUserDefinedConversions &&
           MaybeInvolveUserDefinedConversion(ParamType, Args[I]->getType()))
         continue;
+      Expr *Arg = getOverloadArgForParameter(*this, FD, I + Offset, Args[I]);
+      if (!Arg) {
+        Conversions[ConvIdx].setBad(BadConversionSequence::no_conversion,
+                                    Args[I], ParamType);
+        return true;
+      }
       Conversions[ConvIdx] = TryCopyInitialization(
-          *this, Args[I], ParamType, UserConversionFlag.SuppressUserConversions,
+          *this, Arg, ParamType, UserConversionFlag.SuppressUserConversions,
           /*InOverloadResolution=*/true,
           /*AllowObjCWritebackConversion=*/
           getLangOpts().ObjCAutoRefCount, AllowExplicit);
@@ -11481,8 +11611,10 @@ enum OverloadCandidateKind {
   oc_implicit_default_constructor,
   oc_implicit_copy_constructor,
   oc_implicit_move_constructor,
+  oc_implicit_relocation_constructor,
   oc_implicit_copy_assignment,
   oc_implicit_move_assignment,
+  oc_implicit_relocation_assignment,
   oc_implicit_equality_comparison,
   oc_inherited_constructor
 };
@@ -11530,6 +11662,9 @@ ClassifyOverloadCandidate(Sema &S, const NamedDecl *Found,
       if (Ctor->isDefaultConstructor())
         return oc_implicit_default_constructor;
 
+      if (Ctor->isRelocationConstructor())
+        return oc_implicit_relocation_constructor;
+
       if (Ctor->isMoveConstructor())
         return oc_implicit_move_constructor;
 
@@ -11546,6 +11681,9 @@ ClassifyOverloadCandidate(Sema &S, const NamedDecl *Found,
 
       if (Meth->isMoveAssignmentOperator())
         return oc_implicit_move_assignment;
+
+      if (Meth->isRelocationAssignmentOperator())
+        return oc_implicit_relocation_assignment;
 
       if (Meth->isCopyAssignmentOperator())
         return oc_implicit_copy_assignment;
@@ -12508,10 +12646,16 @@ static void DiagnoseBadTarget(Sema &S, OverloadCandidate *Cand) {
     case oc_implicit_move_constructor:
       CSM = CXXSpecialMemberKind::MoveConstructor;
       break;
+    case oc_implicit_relocation_constructor:
+      CSM = CXXSpecialMemberKind::MoveConstructor;
+      break;
     case oc_implicit_copy_assignment:
       CSM = CXXSpecialMemberKind::CopyAssignment;
       break;
     case oc_implicit_move_assignment:
+      CSM = CXXSpecialMemberKind::MoveAssignment;
+      break;
+    case oc_implicit_relocation_assignment:
       CSM = CXXSpecialMemberKind::MoveAssignment;
       break;
     };

@@ -862,6 +862,43 @@ public:
            needsImplicitMoveConstructor();
   }
 
+  /// Determine whether this class has had a relocation constructor declared by
+  /// the user.
+  bool hasUserDeclaredRelocationConstructor() const;
+
+  /// Determine whether this class has had a relocation assignment operator
+  /// declared by the user.
+  bool hasUserDeclaredRelocationAssignment() const;
+
+  /// Determine whether this class has any relocation constructor declared.
+  bool hasDeclaredRelocationConstructor() const;
+
+  /// Determine whether this class has any relocation assignment operator
+  /// declared.
+  bool hasDeclaredRelocationAssignment() const;
+
+  /// Retrieve the implicitly-declared virtual slicing function, if any.
+  CXXMethodDecl *getVirtualSlicingFunction() const;
+
+  bool hasVirtualSlicingFunction() const {
+    return getVirtualSlicingFunction() != nullptr;
+  }
+
+  /// Determine whether this class should get an implicit relocation
+  /// constructor.
+  bool needsImplicitRelocationConstructor() const {
+    if (!getLangOpts().Relocation)
+      return false;
+    if (hasDeclaredRelocationConstructor())
+        return false;
+    return !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveConstructor() &&
+           !hasUserDeclaredMoveAssignment() &&
+           !hasUserDeclaredDestructor() &&
+           !hasUserDeclaredRelocationAssignment();
+  }
+
   /// Set that we attempted to declare an implicit copy
   /// constructor, but overload resolution failed so we deleted it.
   void setImplicitCopyConstructorIsDeleted() {
@@ -995,6 +1032,22 @@ public:
            !hasUserDeclaredCopyAssignment() &&
            !hasUserDeclaredMoveConstructor() &&
            !hasUserDeclaredDestructor() &&
+           (!isLambda() || lambdaIsDefaultConstructibleAndAssignable());
+  }
+
+  /// Determine whether this class should get an implicit relocation
+  /// assignment operator.
+  bool needsImplicitRelocationAssignment() const {
+    if (!getLangOpts().Relocation)
+      return false;
+    if (hasDeclaredRelocationAssignment())
+        return false;
+    return !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveConstructor() &&
+           !hasUserDeclaredMoveAssignment() &&
+           !hasUserDeclaredDestructor() &&
+           !hasUserDeclaredRelocationConstructor() &&
            (!isLambda() || lambdaIsDefaultConstructibleAndAssignable());
   }
 
@@ -2214,6 +2267,12 @@ public:
   /// of whether it was declared implicitly or explicitly.
   bool isCopyAssignmentOperator() const;
 
+  /// Determine whether this is a relocation assignment operator.
+  bool isRelocationAssignmentOperator() const;
+
+  /// Determine whether this is the hidden virtual slicing function.
+  bool isVirtualSlicingFunction() const;
+
   /// Determine whether this is a move assignment operator.
   bool isMoveAssignmentOperator() const;
 
@@ -2798,6 +2857,9 @@ public:
     unsigned TypeQuals = 0;
     return isMoveConstructor(TypeQuals);
   }
+
+  /// Determine whether this constructor is a relocation constructor.
+  bool isRelocationConstructor() const;
 
   /// Determine whether this is a copy or move constructor.
   ///
@@ -4222,6 +4284,10 @@ public:
   /// Get the variable (if any) that holds the value of evaluating the binding.
   /// Only present for user-defined bindings for tuple-like types.
   VarDecl *getHoldingVar() const;
+
+  /// Determine whether this binding names a complete object from an explicit
+  /// relocation decomposition declaration.
+  bool isRelocDecompositionBinding() const;
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K == Decl::Binding; }

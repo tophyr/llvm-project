@@ -491,6 +491,36 @@ void ASTStmtReader::VisitCoyieldExpr(CoyieldExpr *E) {
   E->OpaqueValue = cast_or_null<OpaqueValueExpr>(Record.readSubStmt());
 }
 
+void ASTStmtReader::VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+  VisitExpr(E);
+  E->CXXDecomposedObjectExprBits.AccessKind = Record.readInt();
+  E->CXXDecomposedObjectExprBits.IsDirectBase = Record.readInt() != 0;
+  E->CXXDecomposedObjectExprBits.IsVirtualBase = Record.readInt() != 0;
+  E->setAccessLoc(readSourceLocation());
+  E->setBaseTypeDecl(Record.readDeclAs<TypeDecl>());
+  E->setOperand(Record.readSubExpr());
+}
+
+void ASTStmtReader::VisitCXXRelocExpr(CXXRelocExpr *E) {
+  VisitExpr(E);
+  E->setRelocLoc(readSourceLocation());
+  E->setOperand(Record.readSubExpr());
+}
+
+void ASTStmtReader::VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+  VisitExpr(E);
+  E->CXXRelocateExprBits.Reclaim = Record.readInt() != 0;
+  E->setBuiltinLoc(readSourceLocation());
+  E->setOperatorDelete(Record.readDeclAs<FunctionDecl>());
+  E->setOperand(Record.readSubExpr());
+}
+
+void ASTStmtReader::VisitCXXImplicitDecompositionExpr(
+    CXXImplicitDecompositionExpr *E) {
+  VisitExpr(E);
+  E->setOperand(Record.readSubExpr());
+}
+
 void ASTStmtReader::VisitDependentCoawaitExpr(DependentCoawaitExpr *E) {
   VisitExpr(E);
   E->KeywordLoc = readSourceLocation();
@@ -4405,6 +4435,21 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
 
     case EXPR_COYIELD:
       S = new (Context) CoyieldExpr(Empty);
+      break;
+
+    case EXPR_CXX_DECOMPOSED_OBJECT:
+      S = new (Context) CXXDecomposedObjectExpr(Empty);
+      break;
+
+    case EXPR_CXX_IMPLICIT_DECOMPOSITION:
+      S = new (Context) CXXImplicitDecompositionExpr(Empty);
+      break;
+
+    case EXPR_CXX_RELOC:
+      S = new (Context) CXXRelocExpr(Empty);
+      break;
+    case EXPR_CXX_RELOCATE:
+      S = new (Context) CXXRelocateExpr(Empty);
       break;
 
     case EXPR_DEPENDENT_COAWAIT:

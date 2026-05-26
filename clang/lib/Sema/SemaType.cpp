@@ -5186,6 +5186,13 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
           QualType ParamTy = Param->getType();
           assert(!ParamTy.isNull() && "Couldn't parse type?");
 
+          if (Param->isRelocParameter() && !D.isDeclarationOfFunction()) {
+            S.Diag(Param->getLocation(),
+                   diag::err_reloc_parameter_non_declaration);
+            D.setInvalidType(true);
+            Param->setIsRelocParameter(false);
+          }
+
           // Look for 'void'.  void is allowed only as a single parameter to a
           // function with no other parameters (C99 6.7.5.3p10).  We record
           // int(void) as a FunctionProtoType with an empty parameter list.
@@ -9680,16 +9687,19 @@ QualType Sema::BuildCountAttributedArrayOrPointerType(QualType WrappedTy,
 /// that expression, according to the rules in C++11
 /// [dcl.type.simple]p4 and C++11 [expr.lambda.prim]p18.
 QualType Sema::getDecltypeForExpr(Expr *E) {
-
   Expr *IDExpr = E;
-  if (auto *ImplCastExpr = dyn_cast<ImplicitCastExpr>(E))
+  Expr *CoreExpr = E->IgnoreParens();
+  if (auto *ImplCastExpr = dyn_cast<ImplicitCastExpr>(E)) {
     IDExpr = ImplCastExpr->getSubExpr();
+    CoreExpr = IDExpr->IgnoreParens();
+  }
 
   if (auto *PackExpr = dyn_cast<PackIndexingExpr>(E)) {
     if (E->isInstantiationDependent())
       IDExpr = PackExpr->getPackIdExpression();
     else
       IDExpr = PackExpr->getSelectedExpr();
+    CoreExpr = IDExpr->IgnoreParens();
   }
 
   if (E->isTypeDependent())
@@ -9707,6 +9717,28 @@ QualType Sema::getDecltypeForExpr(Expr *E) {
   // it unconditionally.
   if (const auto *SNTTPE = dyn_cast<SubstNonTypeTemplateParmExpr>(IDExpr))
     return SNTTPE->getParameterType(Context);
+
+  if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(CoreExpr)) {
+    if (DOE->isWholeObject()) {
+      const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+      const auto *VD = DRE ? dyn_cast<ValueDecl>(DRE->getDecl()) : nullptr;
+      const auto *BD = VD ? dyn_cast<BindingDecl>(VD) : nullptr;
+      if (E != CoreExpr) {
+        if (BD && BD->isRelocDecompositionBinding())
+          return Context.getLValueReferenceType(VD->getType());
+        if (VD)
+          Diag(E->getExprLoc(), diag::err_decomposed_object_decltype_paren)
+              << VD;
+        return QualType();
+      }
+      if (VD) {
+        return VD->getType();
+      }
+    }
+
+    if (DOE->isBaseSubobject() && E == CoreExpr)
+      return Context.getTypeDeclType(cast<TypeDecl>(DOE->getBaseTypeDecl()));
+  }
 
   //     - if e is an unparenthesized id-expression or an unparenthesized class
   //       member access (5.2.5), decltype(e) is the type of the entity named
@@ -9739,8 +9771,8 @@ QualType Sema::getDecltypeForExpr(Expr *E) {
   //   access to a corresponding data member of the closure type that
   //   would have been declared if x were an odr-use of the denoted
   //   entity.
-  if (getCurLambda() && isa<ParenExpr>(IDExpr)) {
-    if (auto *DRE = dyn_cast<DeclRefExpr>(IDExpr->IgnoreParens())) {
+  if (getCurLambda() && isa<ParenExpr>(E)) {
+    if (auto *DRE = dyn_cast<DeclRefExpr>(CoreExpr)) {
       if (auto *Var = dyn_cast<VarDecl>(DRE->getDecl())) {
         QualType T = getCapturedDeclRefType(Var, DRE->getLocation());
         if (!T.isNull())
@@ -9763,7 +9795,10 @@ QualType Sema::BuildDecltypeType(Expr *E, bool AsUnevaluated) {
     // used to build SFINAE gadgets.
     Diag(E->getExprLoc(), diag::warn_side_effects_unevaluated_context);
   }
-  return Context.getDecltypeType(E, getDecltypeForExpr(E));
+  QualType T = getDecltypeForExpr(E);
+  if (T.isNull())
+    return QualType();
+  return Context.getDecltypeType(E, T);
 }
 
 QualType Sema::ActOnPackIndexingType(QualType Pattern, Expr *IndexExpr,

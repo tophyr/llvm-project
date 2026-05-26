@@ -334,6 +334,9 @@ protected:
     friend class AtomicExpr; // ctor
     friend class BlockDeclRefExpr; // ctor
     friend class CallExpr; // ctor
+    friend class CXXDecomposedObjectExpr; // ctor
+    friend class CXXImplicitDecompositionExpr; // ctor
+    friend class CXXRelocateExpr; // ctor
     friend class CXXConstructExpr; // ctor
     friend class CXXDependentScopeMemberExpr; // ctor
     friend class CXXNewExpr; // ctor
@@ -364,6 +367,37 @@ protected:
     unsigned Dependent : llvm::BitWidth<ExprDependence>;
   };
   enum { NumExprBits = NumStmtBits + 5 + llvm::BitWidth<ExprDependence> };
+
+  class CXXDecomposedObjectExprBitfields {
+    friend class ASTStmtReader;
+    friend class CXXDecomposedObjectExpr;
+
+    LLVM_PREFERRED_TYPE(ExprBitfields)
+    unsigned : NumExprBits;
+
+    unsigned AccessKind : 2;
+    unsigned IsDirectBase : 1;
+    unsigned IsVirtualBase : 1;
+  };
+
+  class CXXImplicitDecompositionExprBitfields {
+    friend class ASTStmtReader;
+    friend class CXXImplicitDecompositionExpr;
+
+    LLVM_PREFERRED_TYPE(ExprBitfields)
+    unsigned : NumExprBits;
+  };
+
+  class CXXRelocateExprBitfields {
+    friend class ASTStmtReader;
+    friend class CXXRelocateExpr;
+
+    LLVM_PREFERRED_TYPE(ExprBitfields)
+    unsigned : NumExprBits;
+
+    unsigned Reclaim : 1;
+    SourceLocation BuiltinLoc;
+  };
 
   class ConstantExprBitfields {
     friend class ASTStmtReader;
@@ -1378,6 +1412,10 @@ protected:
     OverloadExprBitfields OverloadExprBits;
     UnresolvedLookupExprBitfields UnresolvedLookupExprBits;
     UnresolvedMemberExprBitfields UnresolvedMemberExprBits;
+    CXXDecomposedObjectExprBitfields CXXDecomposedObjectExprBits;
+    CXXImplicitDecompositionExprBitfields
+        CXXImplicitDecompositionExprBits;
+    CXXRelocateExprBitfields CXXRelocateExprBits;
     CXXNoexceptExprBitfields CXXNoexceptExprBits;
     SubstNonTypeTemplateParmExprBitfields SubstNonTypeTemplateParmExprBits;
     LambdaExprBitfields LambdaExprBits;

@@ -1,0 +1,170 @@
+// RUN: %clang_cc1 -std=c++26 -frelocation -fsyntax-only -verify %s
+
+namespace std {
+class type_info;
+}
+
+struct Good {
+  Good(Good reloc);
+};
+
+struct NamedGood {
+  NamedGood(NamedGood src reloc);
+};
+
+struct WithDefaultArg {
+  WithDefaultArg(WithDefaultArg reloc, int = 0);
+};
+
+struct DelegatingReloc {
+  DelegatingReloc(int);
+  DelegatingReloc(DelegatingReloc src reloc) : DelegatingReloc(0) {} // expected-error {{delegating relocation constructors are not supported}}
+};
+
+struct BadType {
+  BadType(int reloc); // expected-error {{'reloc' parameter must have the same unqualified type as its enclosing class}}
+};
+
+struct BadOrder {
+  BadOrder(int, BadOrder reloc); // expected-error {{'reloc' parameter must be the first parameter of a constructor or assignment operator}}
+};
+
+struct TemplateBad {
+  template <class T>
+  TemplateBad(TemplateBad reloc, T); // expected-error {{'reloc' parameter must have the same unqualified type as its enclosing class}}
+};
+
+void not_a_ctor(int reloc);
+void also_not_a_ctor(int x reloc);
+
+struct NamedRelocStillAllowedOutsideParams {
+  int reloc;
+};
+
+struct RelocOnlyMember {
+  RelocOnlyMember() = delete;
+  RelocOnlyMember(int);
+  RelocOnlyMember(const RelocOnlyMember &) = delete;
+  RelocOnlyMember(RelocOnlyMember &&) = delete;
+  RelocOnlyMember(RelocOnlyMember reloc) = default;
+};
+
+struct ImplicitGood {
+  RelocOnlyMember member;
+  ImplicitGood(int) : member(0) {}
+};
+
+void test_implicit_relocation_ctor() {
+  ImplicitGood src(0);
+  ImplicitGood dst = reloc src;
+  (void)dst;
+}
+
+struct DefaultedGoodMember {
+  DefaultedGoodMember();
+  DefaultedGoodMember(DefaultedGoodMember &&);
+};
+
+struct ExprParam {
+  int value;
+
+  void member();
+  static void static_member();
+
+  ExprParam(ExprParam src reloc) {
+    (void)src; // expected-error {{decomposed object 'src' cannot be used as a value}}
+    (void)src.value;
+    static_assert(__is_same(decltype(src.this), void *));
+    (void)src.this;
+    src.static_member();
+    src.member(); // expected-error {{non-static member 'member' cannot be used through decomposed object 'src'}}
+    (void)sizeof(src);
+    static_assert(__is_same(decltype(src), ExprParam));
+    (void)typeid(src);
+    (void)sizeof((src)); // expected-error {{decomposed object 'src' cannot be used as a value}}
+    using BadDecltype = decltype((src)); // expected-error {{decomposed object 'src' cannot be parenthesized in a decltype operand}}
+    (void)typeid((src)); // expected-error {{decomposed object 'src' cannot be used as a value}}
+  }
+};
+
+struct DefaultedGood {
+  DefaultedGoodMember member;
+  DefaultedGood(DefaultedGood reloc) = default;
+};
+
+struct CopyFallbackMember {
+  CopyFallbackMember();
+  CopyFallbackMember(const CopyFallbackMember &);
+  CopyFallbackMember(CopyFallbackMember &&) = delete;
+};
+
+struct DefaultedCopyFallback {
+  CopyFallbackMember member;
+  DefaultedCopyFallback(DefaultedCopyFallback reloc) = default;
+};
+
+struct TrivialCopyFallbackMember {
+  int value;
+  TrivialCopyFallbackMember() = default;
+  TrivialCopyFallbackMember(const TrivialCopyFallbackMember &) = default;
+  TrivialCopyFallbackMember(TrivialCopyFallbackMember &&) = delete;
+};
+
+struct TrivialDefaultedCopyFallback {
+  TrivialCopyFallbackMember member;
+  TrivialDefaultedCopyFallback(TrivialDefaultedCopyFallback reloc) = default;
+};
+
+void test_explicit_reloc_on_decomposed_ctor_arg(DefaultedGood src reloc) {
+  DefaultedGood dst = reloc src;
+  (void)dst;
+}
+
+void test_defaulted_copy_fallback_ctor(DefaultedCopyFallback src reloc) {
+  DefaultedCopyFallback dst = reloc src;
+  (void)dst;
+}
+
+struct ConstexprCtor {
+  int value;
+  constexpr ConstexprCtor(int value = 1) : value(value) {}
+  constexpr ConstexprCtor(ConstexprCtor reloc) = default;
+};
+
+constexpr bool test_constexpr_reloc_ctor() {
+  ConstexprCtor src;
+  ConstexprCtor dst = reloc src;
+  return dst.value == 1;
+}
+
+static_assert(test_constexpr_reloc_ctor());
+
+struct DefaultedBadConst {
+  DefaultedBadConst(const DefaultedBadConst reloc) = default; // expected-warning {{explicitly defaulted move constructor is implicitly deleted}}
+  // expected-note@-1 {{function is implicitly deleted because its declared type does not match the type of an implicit move constructor}}
+};
+
+struct OutOfLineBadConst {
+  OutOfLineBadConst(const OutOfLineBadConst reloc);
+};
+
+inline OutOfLineBadConst::OutOfLineBadConst( // expected-error {{an explicitly-defaulted relocation constructor must have parameter type 'OutOfLineBadConst'}}
+    const OutOfLineBadConst reloc) = default;
+
+struct ImplicitRelocNoteMember {
+  ImplicitRelocNoteMember() = delete;
+  ImplicitRelocNoteMember(int);
+  ImplicitRelocNoteMember(const ImplicitRelocNoteMember &) = delete;
+  ImplicitRelocNoteMember(ImplicitRelocNoteMember &&) = delete;
+  ImplicitRelocNoteMember(ImplicitRelocNoteMember reloc) = default;
+};
+
+struct ImplicitRelocNote { // expected-note {{candidate constructor (the implicit copy constructor) not viable: no known conversion from 'const char[2]' to 'const ImplicitRelocNote &' for 1st argument}}
+  ImplicitRelocNoteMember member;
+  ImplicitRelocNote(int) : member(0) {} // expected-note {{candidate constructor not viable: no known conversion from 'const char[2]' to 'int' for 1st argument}}
+};
+
+void test_implicit_reloc_ctor_note() {
+  ImplicitRelocNote bad = "x"; // expected-error {{no viable conversion from 'const char[2]' to 'ImplicitRelocNote'}}
+  (void)bad;
+}

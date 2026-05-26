@@ -2199,6 +2199,7 @@ void CodeGenFunction::emitAutoVarTypeCleanup(
   bool useEHCleanup = (cleanupKind & EHCleanup);
   EHStack.pushCleanup<DestroyObject>(cleanupKind, addr, type, destroyer,
                                      useEHCleanup);
+  LocalVarCleanups[var] = EHStack.stable_begin();
 }
 
 void CodeGenFunction::EmitAutoVarCleanups(const AutoVarEmission &emission) {
@@ -2246,6 +2247,29 @@ void CodeGenFunction::EmitAutoVarCleanups(const AutoVarEmission &emission) {
                       /*LoadBlockVarAddr*/ false,
                       cxxDestructorCanThrow(emission.Variable->getType()));
   }
+}
+
+void CodeGenFunction::DeactivateCleanupForRelocatedDecl(const ValueDecl *D) {
+  if (const auto *PVD = dyn_cast<ParmVarDecl>(D)) {
+    EHScopeStack::stable_iterator Cleanup =
+        CalleeDestructedParamCleanups.lookup(PVD);
+    if (Cleanup.isValid()) {
+      DeactivateCleanupBlock(Cleanup, AllocaInsertPt);
+      CalleeDestructedParamCleanups.erase(PVD);
+    }
+    return;
+  }
+
+  const auto *VD = dyn_cast<VarDecl>(D);
+  if (!VD)
+    return;
+
+  EHScopeStack::stable_iterator Cleanup = LocalVarCleanups.lookup(VD);
+  if (!Cleanup.isValid())
+    return;
+
+  DeactivateCleanupBlock(Cleanup, AllocaInsertPt);
+  LocalVarCleanups.erase(VD);
 }
 
 CodeGenFunction::Destroyer *

@@ -1625,6 +1625,7 @@ RedeclarableResult ASTDeclReader::VisitVarDeclImpl(VarDecl *VD) {
     VD->NonParmVarDeclBits.IsInlineSpecified = VarDeclBits.getNextBit();
     VD->NonParmVarDeclBits.IsConstexpr = VarDeclBits.getNextBit();
     VD->NonParmVarDeclBits.IsInitCapture = VarDeclBits.getNextBit();
+    VD->NonParmVarDeclBits.IsRelocObject = VarDeclBits.getNextBit();
     VD->NonParmVarDeclBits.PreviousDeclInSameBlockScope =
         VarDeclBits.getNextBit();
 
@@ -1734,6 +1735,7 @@ void ASTDeclReader::VisitParmVarDecl(ParmVarDecl *PD) {
     PD->setScopeInfo(scopeDepth, scopeIndex);
   }
   PD->ParmVarDeclBits.IsKNRPromoted = ParmVarDeclBits.getNextBit();
+  PD->ParmVarDeclBits.IsRelocParameter = ParmVarDeclBits.getNextBit();
 
   PD->ParmVarDeclBits.HasInheritedDefaultArg = ParmVarDeclBits.getNextBit();
   if (ParmVarDeclBits.getNextBit()) // hasUninstantiatedDefaultArg.

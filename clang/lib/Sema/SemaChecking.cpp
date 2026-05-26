@@ -33,6 +33,7 @@
 #include "clang/AST/NonTrivialTypeVisitor.h"
 #include "clang/AST/OperationKinds.h"
 #include "clang/AST/RecordLayout.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/Type.h"
@@ -1926,6 +1927,219 @@ static ExprResult BuiltinLaunder(Sema &S, CallExpr *TheCall) {
   return TheCall;
 }
 
+static bool hasNewExtendedAlignmentForRelocate(Sema &S, QualType AllocType) {
+  return S.getLangOpts().AlignedAllocation &&
+         S.getASTContext().getTypeAlignIfKnown(AllocType) >
+             S.getASTContext().getTargetInfo().getNewAlign();
+}
+
+static const CXXConstructorDecl *
+findEligibleRelocationCtor(const CXXRecordDecl *RD) {
+  for (const auto *Ctor : RD->ctors())
+    if (Ctor->isRelocationConstructor() && !Ctor->isDeleted())
+      return Ctor;
+  for (const auto *Ctor : RD->ctors())
+    if (Ctor->isMoveConstructor() && !Ctor->isDeleted())
+      return Ctor;
+  for (const auto *Ctor : RD->ctors())
+    if (Ctor->isCopyConstructor() && !Ctor->isDeleted())
+      return Ctor;
+  return nullptr;
+}
+
+static ExprResult BuiltinRelocate(Sema &S, CallExpr *TheCall, bool Reclaim) {
+  if (S.checkArgCount(TheCall, 1))
+    return ExprError();
+
+  StringRef BuiltinName =
+      Reclaim ? "__builtin_reloc_and_reclaim"
+              : "__builtin_reloc_and_uninitialize";
+
+  QualType ParamTy = [&]() {
+    QualType ArgTy = TheCall->getArg(0)->getType();
+    if (const ArrayType *Ty = ArgTy->getAsArrayTypeUnsafe())
+      return S.Context.getPointerType(Ty->getElementType());
+    if (ArgTy->isFunctionType())
+      return S.Context.getPointerType(ArgTy);
+    return ArgTy;
+  }();
+
+  if (ParamTy->isDependentType()) {
+    TheCall->setType(S.Context.DependentTy);
+    return TheCall;
+  }
+
+  auto DiagSelect = [&]() -> std::optional<unsigned> {
+    if (!ParamTy->isPointerType())
+      return 0;
+    if (ParamTy->isFunctionPointerType())
+      return 1;
+    if (ParamTy->isVoidPointerType())
+      return 2;
+    return std::optional<unsigned>{};
+  }();
+  if (DiagSelect) {
+    S.Diag(TheCall->getBeginLoc(), diag::err_builtin_relocate_invalid_arg)
+        << *DiagSelect << BuiltinName << TheCall->getSourceRange();
+    return ExprError();
+  }
+
+  QualType SrcTy = ParamTy->getPointeeType();
+  if (S.RequireCompleteType(TheCall->getBeginLoc(), SrcTy, diag::err_incomplete_type))
+    return ExprError();
+
+  assert(SrcTy->isObjectType() && "Unhandled non-object pointer case");
+
+  InitializedEntity Entity =
+      InitializedEntity::InitializeParameter(S.Context, ParamTy, false);
+  ExprResult Arg =
+      S.PerformCopyInitialization(Entity, SourceLocation(), TheCall->getArg(0));
+  if (Arg.isInvalid())
+    return ExprError();
+  TheCall->setArg(0, Arg.get());
+
+  QualType ResultTy = SrcTy.getUnqualifiedType();
+  if (const auto *RD = ResultTy->getAsCXXRecordDecl()) {
+    const CXXConstructorDecl *Ctor = findEligibleRelocationCtor(RD);
+    if (!Ctor) {
+      S.Diag(TheCall->getBeginLoc(), diag::err_builtin_relocate_no_eligible_ctor)
+          << BuiltinName << ResultTy << TheCall->getSourceRange();
+      return ExprError();
+    }
+    S.MarkFunctionReferenced(TheCall->getBeginLoc(),
+                             const_cast<CXXConstructorDecl *>(Ctor));
+    (void)S.DiagnoseUseOfDecl(const_cast<CXXConstructorDecl *>(Ctor),
+                              TheCall->getBeginLoc());
+    if (!Ctor->isRelocationConstructor()) {
+      if (const auto *Dtor = RD->getDestructor()) {
+        S.MarkFunctionReferenced(TheCall->getBeginLoc(),
+                                 const_cast<CXXDestructorDecl *>(Dtor));
+        (void)S.DiagnoseUseOfDecl(const_cast<CXXDestructorDecl *>(Dtor),
+                                  TheCall->getBeginLoc());
+      }
+    }
+  }
+
+  FunctionDecl *OperatorDelete = nullptr;
+  if (Reclaim) {
+    DeclarationName DeleteName =
+        S.Context.DeclarationNames.getCXXOperatorName(OO_Delete);
+    ImplicitDeallocationParameters IDP = {
+        ResultTy, S.ShouldUseTypeAwareOperatorNewOrDelete(),
+        alignedAllocationModeFromBool(
+            hasNewExtendedAlignmentForRelocate(S, ResultTy)),
+        SizedDeallocationMode::Yes};
+    if (const auto *RD = ResultTy->getAsCXXRecordDecl()) {
+      if (S.FindDeallocationFunction(TheCall->getBeginLoc(),
+                                     const_cast<CXXRecordDecl *>(RD),
+                                     DeleteName, OperatorDelete, IDP))
+        return ExprError();
+    }
+    if (!OperatorDelete) {
+      OperatorDelete = S.FindUsualDeallocationFunction(TheCall->getBeginLoc(),
+                                                       IDP, DeleteName);
+      if (!OperatorDelete)
+        return ExprError();
+    }
+    S.MarkFunctionReferenced(TheCall->getBeginLoc(), OperatorDelete);
+    (void)S.DiagnoseUseOfDecl(OperatorDelete, TheCall->getBeginLoc());
+  }
+
+  return new (S.Context) CXXRelocateExpr(ResultTy, Arg.get(),
+                                         TheCall->getBeginLoc(), Reclaim,
+                                         OperatorDelete);
+}
+
+static ExprResult BuiltinConstructAtReloc(Sema &S, CallExpr *TheCall) {
+  if (S.checkArgCount(TheCall, 2))
+    return ExprError();
+
+  ExprResult DestArg =
+      S.DefaultFunctionArrayLvalueConversion(TheCall->getArg(0));
+  if (DestArg.isInvalid())
+    return ExprError();
+  TheCall->setArg(0, DestArg.get());
+
+  ExprResult SrcArg =
+      S.DefaultFunctionArrayLvalueConversion(TheCall->getArg(1));
+  if (SrcArg.isInvalid())
+    return ExprError();
+  TheCall->setArg(1, SrcArg.get());
+
+  QualType DestTy = DestArg.get()->getType();
+  QualType SrcTy = SrcArg.get()->getType();
+  TheCall->setType(DestTy);
+
+  auto DiagInvalidArg = [&](unsigned Index, unsigned Kind) {
+    S.Diag(TheCall->getBeginLoc(), diag::err_builtin_relocate_invalid_arg)
+        << Kind << "__builtin_construct_at_reloc"
+        << TheCall->getArg(Index)->getSourceRange();
+  };
+
+  if (!DestTy->isPointerType()) {
+    DiagInvalidArg(0, 0);
+    return ExprError();
+  }
+  if (DestTy->isFunctionPointerType()) {
+    DiagInvalidArg(0, 1);
+    return ExprError();
+  }
+  if (DestTy->isVoidPointerType()) {
+    DiagInvalidArg(0, 2);
+    return ExprError();
+  }
+
+  if (!SrcTy->isPointerType()) {
+    DiagInvalidArg(1, 0);
+    return ExprError();
+  }
+  if (SrcTy->isFunctionPointerType()) {
+    DiagInvalidArg(1, 1);
+    return ExprError();
+  }
+  QualType DestObjectTy = DestTy->getPointeeType();
+  QualType SrcObjectTy = SrcTy->isVoidPointerType() ? DestObjectTy
+                                                    : SrcTy->getPointeeType();
+  if (S.RequireCompleteType(TheCall->getBeginLoc(), DestObjectTy,
+                            diag::err_incomplete_type) ||
+      (!SrcTy->isVoidPointerType() &&
+       S.RequireCompleteType(TheCall->getBeginLoc(), SrcObjectTy,
+                             diag::err_incomplete_type)))
+    return ExprError();
+
+  if (!SrcTy->isVoidPointerType() &&
+      !S.Context.hasSameUnqualifiedType(DestObjectTy, SrcObjectTy)) {
+    S.Diag(TheCall->getBeginLoc(), diag::err_typecheck_convert_incompatible)
+        << SrcTy << DestTy << TheCall->getSourceRange();
+    return ExprError();
+  }
+
+  if (const auto *RD = DestObjectTy->getAsCXXRecordDecl()) {
+    const CXXConstructorDecl *Ctor = findEligibleRelocationCtor(RD);
+    if (!Ctor) {
+      S.Diag(TheCall->getBeginLoc(),
+             diag::err_builtin_relocate_no_eligible_ctor)
+          << "__builtin_construct_at_reloc" << DestObjectTy
+          << TheCall->getSourceRange();
+      return ExprError();
+    }
+    S.MarkFunctionReferenced(TheCall->getBeginLoc(),
+                             const_cast<CXXConstructorDecl *>(Ctor));
+    (void)S.DiagnoseUseOfDecl(const_cast<CXXConstructorDecl *>(Ctor),
+                              TheCall->getBeginLoc());
+    if (!Ctor->isRelocationConstructor()) {
+      if (const auto *Dtor = RD->getDestructor()) {
+        S.MarkFunctionReferenced(TheCall->getBeginLoc(),
+                                 const_cast<CXXDestructorDecl *>(Dtor));
+        (void)S.DiagnoseUseOfDecl(const_cast<CXXDestructorDecl *>(Dtor),
+                                  TheCall->getBeginLoc());
+      }
+    }
+  }
+
+  return TheCall;
+}
+
 static ExprResult BuiltinIsWithinLifetime(Sema &S, CallExpr *TheCall) {
   if (S.checkArgCount(TheCall, 1))
     return ExprError();
@@ -2581,6 +2795,12 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
   }
   case Builtin::BI__builtin_launder:
     return BuiltinLaunder(*this, TheCall);
+  case Builtin::BI__builtin_reloc_and_uninitialize:
+    return BuiltinRelocate(*this, TheCall, /*Reclaim=*/false);
+  case Builtin::BI__builtin_reloc_and_reclaim:
+    return BuiltinRelocate(*this, TheCall, /*Reclaim=*/true);
+  case Builtin::BI__builtin_construct_at_reloc:
+    return BuiltinConstructAtReloc(*this, TheCall);
   case Builtin::BI__builtin_is_within_lifetime:
     return BuiltinIsWithinLifetime(*this, TheCall);
   case Builtin::BI__builtin_trivially_relocate:
@@ -14084,6 +14304,286 @@ void Sema::CheckUnsequencedOperations(const Expr *E) {
 
 void Sema::CheckCompletedExpr(Expr *E, SourceLocation CheckLoc,
                               bool IsConstexpr) {
+  if (getLangOpts().CPlusPlus) {
+    struct DecomposedObjectUseChecker
+        : RecursiveASTVisitor<DecomposedObjectUseChecker> {
+      Sema &S;
+      SmallVector<const Stmt *, 8> Parents;
+      unsigned DecltypeDepth = 0;
+      unsigned TypeidDepth = 0;
+
+      explicit DecomposedObjectUseChecker(Sema &S) : S(S) {}
+
+      bool TraverseStmt(Stmt *Node) {
+        if (!Node)
+          return true;
+        Parents.push_back(Node);
+        bool Result = RecursiveASTVisitor::TraverseStmt(Node);
+        Parents.pop_back();
+        return Result;
+      }
+
+      bool TraverseTypeLoc(TypeLoc TL) {
+        if (TL.isNull())
+          return true;
+        bool IsDecltype = !TL.getAs<DecltypeTypeLoc>().isNull();
+        if (IsDecltype)
+          ++DecltypeDepth;
+        bool Result =
+            RecursiveASTVisitor<DecomposedObjectUseChecker>::TraverseTypeLoc(TL);
+        if (IsDecltype)
+          --DecltypeDepth;
+        return Result;
+      }
+
+      bool TraverseCXXTypeidExpr(CXXTypeidExpr *TIE) {
+        ++TypeidDepth;
+        bool Result = RecursiveASTVisitor<DecomposedObjectUseChecker>::
+            TraverseCXXTypeidExpr(TIE);
+        --TypeidDepth;
+        return Result;
+      }
+
+      const Stmt *getParent() const {
+        return Parents.size() >= 2 ? Parents[Parents.size() - 2] : nullptr;
+      }
+
+      const Stmt *getParentSkippingImplicit() const {
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const Stmt *Parent = Parents[I - 2];
+          if (!isa<ImplicitCastExpr, FullExpr, ExprWithCleanups, ConstantExpr>(
+                  Parent))
+            return Parent;
+        }
+        return nullptr;
+      }
+
+      bool isDirectUnevaluatedUse(const CXXDecomposedObjectExpr *DOE) const {
+        unsigned ParenDepth = 0;
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const Stmt *Parent = Parents[I - 2];
+          if (isa<ImplicitCastExpr, FullExpr, ExprWithCleanups, ConstantExpr>(
+                  Parent))
+            continue;
+
+          if (isa<ParenExpr>(Parent)) {
+            ++ParenDepth;
+            continue;
+          }
+
+          if (const auto *UETT = dyn_cast<UnaryExprOrTypeTraitExpr>(Parent))
+            return !UETT->isArgumentType() && ParenDepth <= 1;
+
+          if (const auto *TIE = dyn_cast<CXXTypeidExpr>(Parent))
+            return !TIE->isTypeOperand() && ParenDepth <= 1;
+
+          return false;
+        }
+        return false;
+      }
+
+      bool isDirectTypeidOperand(const CXXDecomposedObjectExpr *DOE) const {
+        unsigned ParenDepth = 0;
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const Stmt *Parent = Parents[I - 2];
+          if (isa<ImplicitCastExpr, FullExpr, ExprWithCleanups, ConstantExpr>(
+                  Parent))
+            continue;
+
+          if (isa<ParenExpr>(Parent)) {
+            ++ParenDepth;
+            continue;
+          }
+
+          return false;
+        }
+        return ParenDepth == 0;
+      }
+
+      static bool isRelocParameter(const FunctionDecl *FD, unsigned Index) {
+        return FD && Index < FD->getNumParams() &&
+               FD->getParamDecl(Index)->isRelocParameter();
+      }
+
+      static bool exprContainsDecomposedObject(const Expr *E,
+                                               const CXXDecomposedObjectExpr *DOE) {
+        while (E) {
+          E = E->IgnoreParenImpCasts();
+          if (E == DOE)
+            return true;
+          if (const auto *CE = dyn_cast<CXXConstructExpr>(E)) {
+            if (CE->getNumArgs() != 1)
+              return false;
+            E = CE->getArg(0);
+            continue;
+          }
+          if (const auto *BTE = dyn_cast<CXXBindTemporaryExpr>(E)) {
+            E = BTE->getSubExpr();
+            continue;
+          }
+          if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E)) {
+            E = MTE->getSubExpr();
+            continue;
+          }
+          if (const auto *RE = dyn_cast<CXXRelocateExpr>(E)) {
+            E = RE->getOperand();
+            continue;
+          }
+          if (const auto *UO = dyn_cast<UnaryOperator>(E)) {
+            if (UO->getOpcode() != UO_AddrOf)
+              return false;
+            E = UO->getSubExpr();
+            continue;
+          }
+          return false;
+        }
+        return false;
+      }
+
+      const FunctionDecl *resolveFunctionPointerCallee(const Expr *E) const {
+        E = E->IgnoreParenImpCasts();
+        if (E->isValueDependent())
+          return nullptr;
+
+        if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+          if (const auto *FD = dyn_cast<FunctionDecl>(DRE->getDecl()))
+            return FD;
+          if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+            if (const Expr *Init = VD->getInit())
+              return resolveFunctionPointerCallee(Init);
+          return nullptr;
+        }
+
+        if (const auto *UO = dyn_cast<UnaryOperator>(E))
+          if (UO->getOpcode() == UO_AddrOf)
+            return resolveFunctionPointerCallee(UO->getSubExpr());
+
+        if (const auto *ME = dyn_cast<MemberExpr>(E))
+          if (const auto *FD = dyn_cast<FunctionDecl>(ME->getMemberDecl()))
+            return FD;
+
+        if (const auto *BO = dyn_cast<BinaryOperator>(E);
+            BO && (BO->getOpcode() == BO_PtrMemD ||
+                   BO->getOpcode() == BO_PtrMemI))
+          return resolveFunctionPointerCallee(BO->getRHS());
+
+        Expr::EvalResult Result;
+        if (E->EvaluateAsRValue(Result, S.Context) &&
+            Result.Val.isMemberPointer())
+          return dyn_cast_or_null<FunctionDecl>(Result.Val.getMemberPointerDecl());
+
+        return nullptr;
+      }
+
+      bool isRelocCallArgument(const CXXDecomposedObjectExpr *DOE) const {
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const auto *Call = dyn_cast<CallExpr>(Parents[I - 2]);
+          if (!Call)
+            continue;
+
+          const FunctionDecl *FD = Call->getDirectCallee();
+          if (!FD)
+            FD = resolveFunctionPointerCallee(Call->getCallee());
+
+          for (unsigned ArgIndex = 0, E = Call->getNumArgs(); ArgIndex != E;
+               ++ArgIndex)
+            if (exprContainsDecomposedObject(Call->getArg(ArgIndex), DOE))
+              return isRelocParameter(FD, ArgIndex);
+        }
+        return false;
+      }
+
+      bool isRelocCtorArgument(const CXXDecomposedObjectExpr *DOE) const {
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const auto *Ctor = dyn_cast<CXXConstructExpr>(Parents[I - 2]);
+          if (!Ctor)
+            continue;
+
+          const CXXConstructorDecl *CtorDecl = Ctor->getConstructor();
+          if (!CtorDecl)
+            continue;
+
+          for (unsigned ArgIndex = 0, E = Ctor->getNumArgs(); ArgIndex != E;
+               ++ArgIndex)
+            if (exprContainsDecomposedObject(Ctor->getArg(ArgIndex), DOE))
+              return ArgIndex < CtorDecl->getNumParams() &&
+                     CtorDecl->getParamDecl(ArgIndex)->isRelocParameter();
+        }
+        return false;
+      }
+
+      bool VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *DOE) {
+        if (!DOE->isWholeObject())
+          return true;
+
+        const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+        const auto *VD =
+            DRE ? dyn_cast<ValueDecl>(DRE->getDecl()) : nullptr;
+        if (!VD)
+          return true;
+
+        if (const auto *BD = dyn_cast<BindingDecl>(VD))
+          if (BD->isRelocDecompositionBinding())
+            return true;
+
+        if (DecltypeDepth)
+          return true;
+        if (TypeidDepth && isDirectTypeidOperand(DOE))
+          return true;
+
+        switch (S.currentEvaluationContext().ExprContext) {
+        case Sema::ExpressionEvaluationContextRecord::EK_Decltype:
+          return true;
+        case Sema::ExpressionEvaluationContextRecord::EK_Typeid:
+          if (isDirectTypeidOperand(DOE))
+            return true;
+          break;
+        default:
+          break;
+        }
+
+        if (isDirectUnevaluatedUse(DOE))
+          return true;
+
+        const Stmt *Parent = getParent();
+        if (isa_and_nonnull<RecoveryExpr>(Parent))
+          return true;
+        if (const auto *ME = dyn_cast_or_null<MemberExpr>(Parent))
+          if (ME->getBase()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (const auto *ME =
+                dyn_cast_or_null<CXXDependentScopeMemberExpr>(Parent))
+          if (!ME->isImplicitAccess() &&
+              ME->getBase()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (const auto *BO = dyn_cast_or_null<BinaryOperator>(Parent))
+          if ((BO->getOpcode() == BO_PtrMemD || BO->getOpcode() == BO_PtrMemI) &&
+              BO->getLHS()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (const auto *DOEParent =
+                dyn_cast_or_null<CXXDecomposedObjectExpr>(Parent))
+          if (DOEParent->getOperand()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (const auto *RE = dyn_cast_or_null<CXXRelocExpr>(Parent))
+          if (RE->getOperand()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (const auto *RE = dyn_cast_or_null<CXXRelocateExpr>(Parent))
+          if (const auto *UO =
+                  dyn_cast<UnaryOperator>(RE->getOperand()->IgnoreParenImpCasts()))
+            if (UO->getOpcode() == UO_AddrOf &&
+                UO->getSubExpr()->IgnoreParenImpCasts() == DOE)
+              return true;
+        if (isRelocCallArgument(DOE) || isRelocCtorArgument(DOE))
+          return true;
+
+        S.Diag(DOE->getExprLoc(), diag::err_decomposed_object_value_use) << VD;
+        return true;
+      }
+    } Checker(*this);
+
+    Checker.TraverseStmt(E);
+  }
+
   llvm::SaveAndRestore ConstantContext(isConstantEvaluatedOverride,
                                        IsConstexpr || isa<ConstantExpr>(E));
   CheckImplicitConversions(E, CheckLoc);

@@ -255,6 +255,15 @@ ForwardIterator uninitialized_fill_n(ForwardIterator first, iter_difference_t<Fo
 template <class T, class ...Args>
 constexpr T* construct_at(T* location, Args&& ...args); // since C++20
 
+#  if _LIBCPP_STD_VER >= 26
+template <class T>
+constexpr T* construct_at(T* location, T src); // since C++26
+template <class T>
+remove_cv_t<T> reloc_and_uninitialize(T* src); // since C++26
+template <class T>
+remove_cv_t<T> reloc_and_reclaim(T* src); // since C++26
+#  endif
+
 namespace ranges {
   template<class T, class... Args>
     constexpr T* construct_at(T* location, Args&&... args); // since C++20
