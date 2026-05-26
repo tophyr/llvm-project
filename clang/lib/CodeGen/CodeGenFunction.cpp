@@ -1604,6 +1604,9 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     // Implicit copy-assignment gets the same special treatment as implicit
     // copy-constructors.
     emitImplicitAssignmentOperatorBody(Args);
+  } else if (isa<CXXMethodDecl>(FD) &&
+             cast<CXXMethodDecl>(FD)->isVirtualSlicingFunction()) {
+    emitVirtualSlicingFunctionBody(Args);
   } else if (DeviceKernelAttr::isOpenCLSpelling(
                  FD->getAttr<DeviceKernelAttr>()) &&
              GD.getKernelReferenceKind() == KernelReferenceKind::Kernel) {

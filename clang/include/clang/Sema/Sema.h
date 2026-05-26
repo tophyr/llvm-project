@@ -5571,6 +5571,10 @@ public:
   CXXConstructorDecl *DeclareImplicitRelocationConstructor(
       CXXRecordDecl *ClassDecl);
 
+  /// Declare the hidden virtual slicing function for the given class.
+  CXXMethodDecl *DeclareImplicitVirtualSlicingFunction(
+      CXXRecordDecl *ClassDecl);
+
   /// DefineImplicitMoveConstructor - Checks for feasibility of
   /// defining this constructor as the move constructor.
   void DefineImplicitMoveConstructor(SourceLocation CurrentLocation,

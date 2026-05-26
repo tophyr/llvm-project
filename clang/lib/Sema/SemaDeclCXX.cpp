@@ -58,6 +58,8 @@
 
 using namespace clang;
 
+static void diagnoseVirtualSlicingDefinition(Sema &S, CXXRecordDecl *RD);
+
 //===----------------------------------------------------------------------===//
 // CheckDefaultArgumentVisitor
 //===----------------------------------------------------------------------===//
@@ -7071,6 +7073,8 @@ ReportOverrides(Sema &S, unsigned DiagID, const CXXMethodDecl *MD,
   return IssuedDiagnostic;
 }
 
+static bool needsImplicitVirtualSlicingFunction(const CXXRecordDecl *RD);
+
 void Sema::CheckCompletedCXXClass(Scope *S, CXXRecordDecl *Record) {
   if (!Record)
     return;
@@ -7334,6 +7338,11 @@ void Sema::CheckCompletedCXXClass(Scope *S, CXXRecordDecl *Record) {
   // 'constexpr'.
   if (CXXDestructorDecl *Dtor = Record->getDestructor())
     CompleteMemberFunction(Dtor);
+
+  if (needsImplicitVirtualSlicingFunction(Record))
+    DeclareImplicitVirtualSlicingFunction(Record);
+  if (Record->hasVirtualSlicingFunction())
+    diagnoseVirtualSlicingDefinition(*this, Record);
 
   bool HasMethodWithOverrideControl = false,
        HasOverridingMethodWithoutOverrideControl = false;
@@ -11088,6 +11097,77 @@ static void findImplicitlyDeclaredEqualityComparisons(
   }
 }
 
+static bool hasNonDeletedExplicitRelocationConstructor(const CXXRecordDecl *RD) {
+  for (const auto *Ctor : RD->ctors())
+    if (!Ctor->isImplicit() && Ctor->isRelocationConstructor() &&
+        !Ctor->isDeleted())
+      return true;
+  return false;
+}
+
+static bool hasBaseVirtualSlicingFunction(const CXXRecordDecl *RD) {
+  for (const auto &Base : RD->bases())
+    if (const auto *BaseRD = Base.getType()->getAsCXXRecordDecl())
+      if (BaseRD->hasVirtualSlicingFunction())
+        return true;
+  return false;
+}
+
+static bool needsImplicitVirtualSlicingFunction(const CXXRecordDecl *RD) {
+  if (RD->hasVirtualSlicingFunction())
+    return false;
+  const CXXDestructorDecl *Dtor = RD->getDestructor();
+  if (!Dtor || !Dtor->isVirtual())
+    return false;
+  return hasNonDeletedExplicitRelocationConstructor(RD) ||
+         hasBaseVirtualSlicingFunction(RD);
+}
+
+static bool hasEligibleVirtualSlicingCtor(Sema &S, CXXRecordDecl *RD) {
+  for (const auto *Ctor : RD->ctors())
+    if (Ctor->isRelocationConstructor() && !Ctor->isDeleted())
+      return true;
+
+  if (auto *Move = S.LookupMovingConstructor(RD, /*Quals=*/0))
+    if (!Move->isDeleted())
+      return true;
+
+  if (auto *Copy = S.LookupCopyingConstructor(RD, Qualifiers::Const))
+    if (!Copy->isDeleted())
+      return true;
+
+  if (auto *Copy = S.LookupCopyingConstructor(RD, /*Quals=*/0))
+    if (!Copy->isDeleted())
+      return true;
+
+  return false;
+}
+
+static void diagnoseVirtualSlicingDefinition(Sema &S, CXXRecordDecl *RD) {
+  auto *Slice = RD->getVirtualSlicingFunction();
+  if (!Slice || Slice->isInvalidDecl())
+    return;
+
+  auto *Dtor = RD->getDestructor();
+  if (!Dtor)
+    return;
+
+  if (Dtor->isUserProvided()) {
+    S.Diag(Slice->getLocation(),
+           diag::err_virtual_slicing_user_provided_destructor)
+        << RD;
+    S.Diag(Dtor->getLocation(), diag::note_member_declared_here) << Dtor;
+    Slice->setInvalidDecl();
+    return;
+  }
+
+  if (!hasEligibleVirtualSlicingCtor(S, RD)) {
+    S.Diag(Slice->getLocation(), diag::err_virtual_slicing_no_eligible_ctor)
+        << RD;
+    Slice->setInvalidDecl();
+  }
+}
+
 void Sema::AddImplicitlyDeclaredMembersToClass(CXXRecordDecl *ClassDecl) {
   // Don't add implicit special members to templated classes.
   // FIXME: This means unqualified lookups for 'operator=' within a class
@@ -11165,6 +11245,7 @@ void Sema::AddImplicitlyDeclaredMembersToClass(CXXRecordDecl *ClassDecl) {
           ClassDecl->needsOverloadResolutionForDestructor())
         DeclareImplicitDestructor(ClassDecl);
     }
+
   }
 
   // C++2a [class.compare.default]p3:
@@ -16566,6 +16647,64 @@ CXXConstructorDecl *Sema::DeclareImplicitRelocationConstructor(
   ClassDecl->addDecl(RelocationConstructor);
 
   return RelocationConstructor;
+}
+
+CXXMethodDecl *
+Sema::DeclareImplicitVirtualSlicingFunction(CXXRecordDecl *ClassDecl) {
+  if (ClassDecl->hasVirtualSlicingFunction())
+    return ClassDecl->getVirtualSlicingFunction();
+
+  CXXDestructorDecl *Dtor = ClassDecl->getDestructor();
+  if (!Dtor || !Dtor->isVirtual())
+    return nullptr;
+
+  ASTContext &Context = getASTContext();
+  IdentifierInfo *SliceII = &Context.Idents.get("__reloc_slice");
+  DeclarationName Name = Context.DeclarationNames.getIdentifier(SliceII);
+  SourceLocation ClassLoc = ClassDecl->getLocation();
+  DeclarationNameInfo NameInfo(Name, ClassLoc);
+
+  QualType VoidPtrTy = Context.VoidPtrTy;
+  QualType ConstVoidPtrTy = Context.getPointerType(Context.VoidTy.withConst());
+  QualType ArgTypes[] = {ConstVoidPtrTy, VoidPtrTy, Context.BoolTy};
+  FunctionProtoType::ExtProtoInfo EPI;
+  EPI.ExceptionSpec.Type = EST_None;
+  EPI.ExtInfo = EPI.ExtInfo.withCallingConv(
+      Context.getDefaultCallingConvention(/*IsVariadic=*/false,
+                                          /*IsCXXMethod=*/true));
+  QualType SliceTy = Context.getFunctionType(Context.VoidTy, ArgTypes, EPI);
+
+  CXXMethodDecl *Slice = CXXMethodDecl::Create(
+      Context, ClassDecl, ClassLoc, NameInfo, SliceTy, /*TInfo=*/nullptr,
+      SC_None, getCurFPFeatures().isFPConstrained(), /*isInline=*/true,
+      ConstexprSpecKind::Unspecified, SourceLocation());
+  Slice->setAccess(Dtor->getAccess());
+  Slice->setImplicit();
+  Slice->setVirtualAsWritten(true);
+
+  ParmVarDecl *TargetParam = ParmVarDecl::Create(
+      Context, Slice, ClassLoc, ClassLoc, &Context.Idents.get("target"),
+      ConstVoidPtrTy, /*TInfo=*/nullptr, SC_None, nullptr);
+  ParmVarDecl *DestParam = ParmVarDecl::Create(
+      Context, Slice, ClassLoc, ClassLoc, &Context.Idents.get("dest"),
+      VoidPtrTy, /*TInfo=*/nullptr, SC_None, nullptr);
+  ParmVarDecl *ReclaimParam = ParmVarDecl::Create(
+      Context, Slice, ClassLoc, ClassLoc, &Context.Idents.get("reclaim"),
+      Context.BoolTy, /*TInfo=*/nullptr, SC_None, nullptr);
+  Slice->setParams({TargetParam, DestParam, ReclaimParam});
+
+  for (const auto &Base : ClassDecl->bases()) {
+    if (auto *BaseRD = Base.getType()->getAsCXXRecordDecl())
+      if (auto *BaseSlice = BaseRD->getVirtualSlicingFunction())
+        Slice->addOverriddenMethod(BaseSlice->getCanonicalDecl());
+  }
+
+  Scope *Scope = getScopeForContext(ClassDecl);
+  if (Scope)
+    PushOnScopeChains(Slice, Scope, false);
+  Slice->setBody(new (Context) CompoundStmt(ClassLoc));
+  ClassDecl->addDecl(Slice);
+  return Slice;
 }
 
 void Sema::DefineImplicitMoveConstructor(SourceLocation CurrentLocation,

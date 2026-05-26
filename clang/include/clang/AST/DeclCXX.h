@@ -877,6 +877,13 @@ public:
   /// declared.
   bool hasDeclaredRelocationAssignment() const;
 
+  /// Retrieve the implicitly-declared virtual slicing function, if any.
+  CXXMethodDecl *getVirtualSlicingFunction() const;
+
+  bool hasVirtualSlicingFunction() const {
+    return getVirtualSlicingFunction() != nullptr;
+  }
+
   /// Determine whether this class should get an implicit relocation
   /// constructor.
   bool needsImplicitRelocationConstructor() const {
@@ -2262,6 +2269,9 @@ public:
 
   /// Determine whether this is a relocation assignment operator.
   bool isRelocationAssignmentOperator() const;
+
+  /// Determine whether this is the hidden virtual slicing function.
+  bool isVirtualSlicingFunction() const;
 
   /// Determine whether this is a move assignment operator.
   bool isMoveAssignmentOperator() const;

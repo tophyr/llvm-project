@@ -1700,6 +1700,17 @@ bool CXXRecordDecl::hasDeclaredRelocationAssignment() const {
   return false;
 }
 
+static bool isVirtualSlicingFunctionName(DeclarationName Name) {
+  const IdentifierInfo *II = Name.getAsIdentifierInfo();
+  return II && II->isStr("__reloc_slice");
+}
+
+CXXMethodDecl *CXXRecordDecl::getVirtualSlicingFunction() const {
+  for (auto *Method : methods())
+    if (Method->isVirtualSlicingFunction())
+      return Method;
+  return nullptr;
+}
 
 bool CXXRecordDecl::isCLike() const {
   if (getTagKind() == TagTypeKind::Class ||
@@ -2771,6 +2782,27 @@ bool CXXMethodDecl::isRelocationAssignmentOperator() const {
   QualType ClassType =
       Context.getCanonicalType(Context.getTypeDeclType(getParent()));
   return Context.hasSameUnqualifiedType(ParamType, ClassType);
+}
+
+bool CXXMethodDecl::isVirtualSlicingFunction() const {
+  if (!isImplicit() || !isInstance() || getPrimaryTemplate() ||
+      getDescribedFunctionTemplate() || getNumExplicitParams() != 3)
+    return false;
+  if (!isVirtualSlicingFunctionName(getDeclName()) ||
+      !getReturnType()->isVoidType())
+    return false;
+
+  const auto *Proto = getType()->getAs<FunctionProtoType>();
+  if (!Proto || Proto->getMethodQuals().hasQualifiers() ||
+      Proto->getRefQualifier() != RQ_None)
+    return false;
+
+  QualType First = getParamDecl(0)->getType();
+  QualType Second = getParamDecl(1)->getType();
+  QualType Third = getParamDecl(2)->getType();
+  return First->isPointerType() && First->getPointeeType().isConstQualified() &&
+         First->getPointeeType()->isVoidType() && Second->isVoidPointerType() &&
+         Third->isBooleanType();
 }
 
 bool CXXMethodDecl::isMoveAssignmentOperator() const {

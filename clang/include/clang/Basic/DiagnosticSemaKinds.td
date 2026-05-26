@@ -7965,6 +7965,10 @@ def err_reloc_object_bad_type : Error<
   "'reloc' may only be applied to a non-union class object of non-reference type">;
 def err_reloc_object_user_provided_destructor : Error<
   "'reloc' may not decompose type %0 because its destructor is user-provided">;
+def err_virtual_slicing_user_provided_destructor : Error<
+  "virtual slicing function for %0 is ill-formed because its destructor is user-provided">;
+def err_virtual_slicing_no_eligible_ctor : Error<
+  "virtual slicing function for %0 is ill-formed because it has no eligible relocation, move, or copy constructor">;
 def err_reloc_parameter_invalid_context : Error<
   "'reloc' parameter syntax is only valid on a constructor or assignment "
   "operator parameter">;
