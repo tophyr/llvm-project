@@ -1550,6 +1550,8 @@ private:
 
   /// LabelMap - This keeps track of the LLVM basic block for each C label.
   llvm::DenseMap<const LabelDecl *, JumpDest> LabelMap;
+  llvm::DenseMap<const MaterializeTemporaryExpr *, const Expr *>
+      ActiveImplicitDecompositions;
 
   // BreakContinueStack - This keeps track of where break and continue
   // statements should jump to.
@@ -3471,6 +3473,10 @@ public:
   void EmitAutoVarCleanups(const AutoVarEmission &emission);
   void emitAutoVarTypeCleanup(const AutoVarEmission &emission,
                               QualType::DestructionKind dtorKind);
+  void EnterImplicitDecomposition(const CXXImplicitDecompositionExpr *E);
+  void LeaveImplicitDecomposition(const CXXImplicitDecompositionExpr *E);
+  const Expr *
+  getImplicitDecompositionOperand(const MaterializeTemporaryExpr *E) const;
 
   void MaybeEmitDeferredVarDeclInit(const VarDecl *var);
 

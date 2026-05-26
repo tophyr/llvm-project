@@ -507,6 +507,20 @@ void ASTStmtReader::VisitCXXRelocExpr(CXXRelocExpr *E) {
   E->setOperand(Record.readSubExpr());
 }
 
+void ASTStmtReader::VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+  VisitExpr(E);
+  E->CXXRelocateExprBits.Reclaim = Record.readInt() != 0;
+  E->setBuiltinLoc(readSourceLocation());
+  E->setOperatorDelete(Record.readDeclAs<FunctionDecl>());
+  E->setOperand(Record.readSubExpr());
+}
+
+void ASTStmtReader::VisitCXXImplicitDecompositionExpr(
+    CXXImplicitDecompositionExpr *E) {
+  VisitExpr(E);
+  E->setOperand(Record.readSubExpr());
+}
+
 void ASTStmtReader::VisitDependentCoawaitExpr(DependentCoawaitExpr *E) {
   VisitExpr(E);
   E->KeywordLoc = readSourceLocation();
@@ -4427,8 +4441,15 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       S = new (Context) CXXDecomposedObjectExpr(Empty);
       break;
 
+    case EXPR_CXX_IMPLICIT_DECOMPOSITION:
+      S = new (Context) CXXImplicitDecompositionExpr(Empty);
+      break;
+
     case EXPR_CXX_RELOC:
       S = new (Context) CXXRelocExpr(Empty);
+      break;
+    case EXPR_CXX_RELOCATE:
+      S = new (Context) CXXRelocateExpr(Empty);
       break;
 
     case EXPR_DEPENDENT_COAWAIT:

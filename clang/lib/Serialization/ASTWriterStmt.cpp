@@ -476,6 +476,22 @@ void ASTStmtWriter::VisitCXXRelocExpr(CXXRelocExpr *E) {
   Code = serialization::EXPR_CXX_RELOC;
 }
 
+void ASTStmtWriter::VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+  VisitExpr(E);
+  Record.push_back(E->isReclaiming());
+  Record.AddSourceLocation(E->getBuiltinLoc());
+  Record.AddDeclRef(E->getOperatorDelete());
+  Record.AddStmt(E->getOperand());
+  Code = serialization::EXPR_CXX_RELOCATE;
+}
+
+void ASTStmtWriter::VisitCXXImplicitDecompositionExpr(
+    CXXImplicitDecompositionExpr *E) {
+  VisitExpr(E);
+  Record.AddStmt(E->getOperand());
+  Code = serialization::EXPR_CXX_IMPLICIT_DECOMPOSITION;
+}
+
 void ASTStmtWriter::VisitDependentCoawaitExpr(DependentCoawaitExpr *E) {
   VisitExpr(E);
   Record.AddSourceLocation(E->getKeywordLoc());

@@ -2643,6 +2643,7 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
   case CXXDecomposedObjectExprClass:
     return false;
   case CXXRelocExprClass:
+  case CXXRelocateExprClass:
     return false;
   case ChooseExprClass:
     return cast<ChooseExpr>(this)->getChosenSubExpr()->
@@ -3645,8 +3646,10 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case ArrayTypeTraitExprClass:
   case ExpressionTraitExprClass:
   case CXXDecomposedObjectExprClass:
+  case CXXImplicitDecompositionExprClass:
   case CXXNoexceptExprClass:
   case CXXRelocExprClass:
+  case CXXRelocateExprClass:
   case SizeOfPackExprClass:
   case ObjCStringLiteralClass:
   case ObjCEncodeExprClass:

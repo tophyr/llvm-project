@@ -486,6 +486,12 @@ public:
     }
     return Visit(E->getOperand());
   }
+  Value *VisitCXXImplicitDecompositionExpr(CXXImplicitDecompositionExpr *E) {
+    CGF.EnterImplicitDecomposition(E);
+    Value *Result = Visit(E->getOperand());
+    CGF.LeaveImplicitDecomposition(E);
+    return Result;
+  }
   Value *VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     return Visit(GE->getResultExpr());
   }

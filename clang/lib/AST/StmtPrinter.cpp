@@ -2628,6 +2628,18 @@ void StmtPrinter::VisitCXXRelocExpr(CXXRelocExpr *E) {
   PrintExpr(E->getOperand());
 }
 
+void StmtPrinter::VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+  OS << (E->isReclaiming() ? "__builtin_reloc_and_reclaim("
+                           : "__builtin_reloc_and_uninitialize(");
+  PrintExpr(E->getOperand());
+  OS << ')';
+}
+
+void StmtPrinter::VisitCXXImplicitDecompositionExpr(
+    CXXImplicitDecompositionExpr *E) {
+  PrintExpr(E->getOperand());
+}
+
 void StmtPrinter::VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
   PrintExpr(E->getOperand());
   if (E->isBaseSubobject())

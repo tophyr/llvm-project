@@ -4319,6 +4319,88 @@ public:
   }
 };
 
+class CXXImplicitDecompositionExpr : public Expr {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  Stmt *Operand;
+
+public:
+  CXXImplicitDecompositionExpr(QualType Ty, Expr *Operand)
+      : Expr(CXXImplicitDecompositionExprClass, Ty, Operand->getValueKind(),
+             Operand->getObjectKind()),
+        Operand(Operand) {
+    setDependence(Operand->getDependence());
+  }
+
+  CXXImplicitDecompositionExpr(EmptyShell Empty)
+      : Expr(CXXImplicitDecompositionExprClass, Empty) {}
+
+  Expr *getOperand() const { return cast<Expr>(Operand); }
+  void setOperand(Expr *E) { Operand = E; }
+
+  SourceLocation getBeginLoc() const { return getOperand()->getBeginLoc(); }
+  SourceLocation getEndLoc() const { return getOperand()->getEndLoc(); }
+  SourceRange getSourceRange() const {
+    return SourceRange(getBeginLoc(), getEndLoc());
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXImplicitDecompositionExprClass;
+  }
+
+  child_range children() { return child_range(&Operand, &Operand + 1); }
+  const_child_range children() const {
+    return const_child_range(&Operand, &Operand + 1);
+  }
+};
+
+class CXXRelocateExpr : public Expr {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  FunctionDecl *OperatorDelete = nullptr;
+  Stmt *Operand = nullptr;
+
+public:
+  CXXRelocateExpr(QualType Ty, Expr *Operand, SourceLocation BuiltinLoc,
+                  bool Reclaim, FunctionDecl *OperatorDelete)
+      : Expr(CXXRelocateExprClass, Ty, VK_PRValue, OK_Ordinary),
+        OperatorDelete(OperatorDelete), Operand(Operand) {
+    CXXRelocateExprBits.Reclaim = Reclaim;
+    CXXRelocateExprBits.BuiltinLoc = BuiltinLoc;
+    setDependence(Operand->getDependence());
+  }
+
+  CXXRelocateExpr(EmptyShell Empty) : Expr(CXXRelocateExprClass, Empty) {}
+
+  Expr *getOperand() const { return cast<Expr>(Operand); }
+  void setOperand(Expr *E) { Operand = E; }
+
+  bool isReclaiming() const { return CXXRelocateExprBits.Reclaim; }
+
+  FunctionDecl *getOperatorDelete() const { return OperatorDelete; }
+  void setOperatorDelete(FunctionDecl *FD) { OperatorDelete = FD; }
+
+  SourceLocation getBuiltinLoc() const { return CXXRelocateExprBits.BuiltinLoc; }
+  void setBuiltinLoc(SourceLocation Loc) { CXXRelocateExprBits.BuiltinLoc = Loc; }
+
+  SourceLocation getBeginLoc() const { return getBuiltinLoc(); }
+  SourceLocation getEndLoc() const { return getOperand()->getEndLoc(); }
+  SourceRange getSourceRange() const {
+    return SourceRange(getBeginLoc(), getEndLoc());
+  }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == CXXRelocateExprClass;
+  }
+
+  child_range children() { return child_range(&Operand, &Operand + 1); }
+  const_child_range children() const {
+    return const_child_range(&Operand, &Operand + 1);
+  }
+};
+
 class CXXDecomposedObjectExpr : public Expr {
   friend class ASTStmtReader;
   friend class ASTStmtWriter;

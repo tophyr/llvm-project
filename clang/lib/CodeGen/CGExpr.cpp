@@ -25,6 +25,7 @@
 #include "ConstantEmitter.h"
 #include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/CXXInheritance.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclObjC.h"
@@ -80,6 +81,252 @@ enum VariableTypeDescriptorKind : uint16_t {
   /// Any other type. The value representation is unspecified.
   TK_Unknown = 0xffff
 };
+
+namespace {
+
+struct ImplicitDecompositionStep {
+  enum StepKind { SK_Base, SK_Field, SK_ArrayElement } Kind;
+  const CXXBaseSpecifier *BaseSpec = nullptr;
+  const FieldDecl *Field = nullptr;
+  uint64_t ArrayIndex = 0;
+
+  explicit ImplicitDecompositionStep(const CXXBaseSpecifier *BaseSpec)
+      : Kind(SK_Base), BaseSpec(BaseSpec) {}
+  explicit ImplicitDecompositionStep(const FieldDecl *Field)
+      : Kind(SK_Field), Field(Field) {}
+  explicit ImplicitDecompositionStep(uint64_t ArrayIndex)
+      : Kind(SK_ArrayElement), ArrayIndex(ArrayIndex) {}
+};
+
+static bool buildImplicitDecompositionPath(
+    ASTContext &Ctx, const Expr *E, const MaterializeTemporaryExpr *&Root,
+    SmallVectorImpl<ImplicitDecompositionStep> &Steps) {
+  E = E->IgnoreParens();
+
+  if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E)) {
+    Root = MTE;
+    return true;
+  }
+
+  if (const auto *BTE = dyn_cast<CXXBindTemporaryExpr>(E))
+    return buildImplicitDecompositionPath(Ctx, BTE->getSubExpr(), Root, Steps);
+
+  if (const auto *CE = dyn_cast<CastExpr>(E)) {
+    if (CE->getCastKind() == CK_NoOp ||
+        CE->getCastKind() == CK_ArrayToPointerDecay)
+      return buildImplicitDecompositionPath(Ctx, CE->getSubExpr(), Root, Steps);
+
+    if ((CE->getCastKind() == CK_DerivedToBase ||
+         CE->getCastKind() == CK_UncheckedDerivedToBase) &&
+        E->getType()->isRecordType()) {
+      if (!buildImplicitDecompositionPath(Ctx, CE->getSubExpr(), Root, Steps))
+        return false;
+      for (const auto *Base : CE->path())
+        Steps.push_back(ImplicitDecompositionStep(Base));
+      return true;
+    }
+
+    return false;
+  }
+
+  if (const auto *ME = dyn_cast<MemberExpr>(E)) {
+    if (ME->isArrow())
+      return false;
+    const auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
+    if (!FD || FD->isBitField() || FD->getType()->isReferenceType())
+      return false;
+    if (!buildImplicitDecompositionPath(Ctx, ME->getBase(), Root, Steps))
+      return false;
+    Steps.push_back(ImplicitDecompositionStep(FD));
+    return true;
+  }
+
+  if (const auto *ASE = dyn_cast<ArraySubscriptExpr>(E)) {
+    Expr::EvalResult IndexResult;
+    if (!ASE->getIdx()->EvaluateAsInt(IndexResult, Ctx) ||
+        !IndexResult.Val.isInt())
+      return false;
+    if (!buildImplicitDecompositionPath(Ctx, ASE->getBase(), Root, Steps))
+      return false;
+    Steps.push_back(ImplicitDecompositionStep(
+        IndexResult.Val.getInt().getExtValue()));
+    return true;
+  }
+
+  if (const auto *BO = dyn_cast<BinaryOperator>(E)) {
+    if (BO->getOpcode() != BO_PtrMemD)
+      return false;
+
+    Expr::EvalResult MemberPtrResult;
+    if (!BO->getRHS()->EvaluateAsRValue(MemberPtrResult, Ctx) ||
+        !MemberPtrResult.Val.isMemberPointer())
+      return false;
+
+    const auto *FD = dyn_cast_or_null<FieldDecl>(
+        MemberPtrResult.Val.getMemberPointerDecl());
+    if (!FD || FD->isBitField() || FD->getType()->isReferenceType())
+      return false;
+
+    if (!buildImplicitDecompositionPath(Ctx, BO->getLHS(), Root, Steps))
+      return false;
+
+    const auto *ObjectRD = BO->getLHS()->getType()->getAsCXXRecordDecl();
+    const auto *FieldParent = dyn_cast<CXXRecordDecl>(FD->getParent());
+    if (!ObjectRD || !FieldParent)
+      return false;
+
+    if (ObjectRD != FieldParent) {
+      CXXBasePaths Paths;
+      Paths.setOrigin(const_cast<CXXRecordDecl *>(ObjectRD));
+      if (!ObjectRD->lookupInBases(
+              [&](const CXXBaseSpecifier *Base, CXXBasePath &Path) {
+                return Ctx.hasSameType(Base->getType(),
+                                       Ctx.getRecordType(FieldParent));
+              },
+              Paths))
+        return false;
+
+      QualType BaseType = Ctx.getRecordType(FieldParent);
+      if (Paths.isAmbiguous(Ctx.getCanonicalType(BaseType)))
+        return false;
+
+      for (const auto &Element : Paths.front())
+        Steps.push_back(ImplicitDecompositionStep(Element.Base));
+    }
+
+    Steps.push_back(ImplicitDecompositionStep(FD));
+    return true;
+  }
+
+  return false;
+}
+
+struct DestroyTemporaryExcludingSubobject final : EHScopeStack::Cleanup {
+  Address Addr;
+  QualType Type;
+  const Expr *Subobject;
+
+  DestroyTemporaryExcludingSubobject(Address Addr, QualType Type,
+                                     const Expr *Subobject)
+      : Addr(Addr), Type(Type), Subobject(Subobject) {}
+
+  static void emitDestroyExceptSubobject(CodeGenFunction &CGF, Address Addr,
+                                         QualType Type,
+                                         ArrayRef<ImplicitDecompositionStep> Steps,
+                                         unsigned StepIndex) {
+    if (StepIndex == Steps.size())
+      return;
+
+    const ImplicitDecompositionStep &Step = Steps[StepIndex];
+
+    if (const auto *CAT = CGF.getContext().getAsConstantArrayType(Type)) {
+      if (Step.Kind != ImplicitDecompositionStep::SK_ArrayElement)
+        return;
+      QualType ElemType = CAT->getElementType();
+      CharUnits ElemAlign =
+          Addr.getAlignment().alignmentOfArrayElement(
+              CGF.getContext().getTypeSizeInChars(ElemType));
+      for (int64_t I = CAT->getSize().getSExtValue() - 1; I >= 0; --I) {
+        Address ElemAddr = CGF.Builder.CreateConstArrayGEP(
+            Addr, static_cast<unsigned>(I), "implicit.decomp");
+        ElemAddr = Address(ElemAddr.getBasePointer(), ElemAddr.getElementType(),
+                           ElemAlign, ElemAddr.isKnownNonNull());
+        if (static_cast<uint64_t>(I) == Step.ArrayIndex) {
+          emitDestroyExceptSubobject(CGF, ElemAddr, ElemType, Steps,
+                                     StepIndex + 1);
+          continue;
+        }
+        if (auto DK = ElemType.isDestructedType(); DK != QualType::DK_none)
+          CGF.emitDestroy(ElemAddr, ElemType, CGF.getDestroyer(DK),
+                          /*useEHCleanupForArray=*/false);
+      }
+      return;
+    }
+
+    const auto *RD = Type->getAsCXXRecordDecl();
+    if (!RD)
+      return;
+    LValue ThisLV = CGF.MakeAddrLValue(Addr, Type);
+
+    SmallVector<const FieldDecl *, 8> Fields(RD->fields());
+    for (const auto *FD : llvm::reverse(Fields)) {
+      if (FD->isUnnamedBitField())
+        continue;
+      LValue FieldLV = CGF.EmitLValueForField(ThisLV, FD);
+      assert(FieldLV.isSimple());
+      if (Step.Kind == ImplicitDecompositionStep::SK_Field &&
+          Step.Field == FD) {
+        emitDestroyExceptSubobject(CGF, FieldLV.getAddress(), FD->getType(),
+                                   Steps, StepIndex + 1);
+        continue;
+      }
+
+      if (auto DK = FD->getType().isDestructedType(); DK != QualType::DK_none)
+        CGF.emitDestroy(FieldLV.getAddress(), FD->getType(), CGF.getDestroyer(DK),
+                        /*useEHCleanupForArray=*/false);
+    }
+
+    for (const auto &Base : llvm::reverse(RD->bases())) {
+      if (Base.isVirtual())
+        continue;
+      const auto *BaseRD = Base.getType()->getAsCXXRecordDecl();
+      if (!BaseRD)
+        continue;
+
+      Address BaseAddr = CGF.GetAddressOfDirectBaseInCompleteClass(
+          Addr, RD, BaseRD, /*BaseIsVirtual=*/false);
+      if (Step.Kind == ImplicitDecompositionStep::SK_Base &&
+          Step.BaseSpec == &Base) {
+        emitDestroyExceptSubobject(CGF, BaseAddr, Base.getType(), Steps,
+                                   StepIndex + 1);
+        continue;
+      }
+
+      if (auto DK = Base.getType().isDestructedType(); DK != QualType::DK_none)
+        CGF.emitDestroy(BaseAddr, Base.getType(), CGF.getDestroyer(DK),
+                        /*useEHCleanupForArray=*/false);
+    }
+  }
+
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    SmallVector<ImplicitDecompositionStep, 4> Steps;
+    const MaterializeTemporaryExpr *Root = nullptr;
+    if (!buildImplicitDecompositionPath(CGF.getContext(), Subobject, Root,
+                                        Steps) ||
+        !Root ||
+        Steps.empty())
+      return;
+    emitDestroyExceptSubobject(CGF, Addr, Type, Steps, 0);
+  }
+};
+
+} // namespace
+
+void CodeGenFunction::EnterImplicitDecomposition(
+    const CXXImplicitDecompositionExpr *E) {
+  SmallVector<ImplicitDecompositionStep, 4> Steps;
+  const MaterializeTemporaryExpr *Root = nullptr;
+  if (buildImplicitDecompositionPath(getContext(), E->getOperand(), Root,
+                                     Steps) &&
+      Root)
+    ActiveImplicitDecompositions[Root] = E->getOperand();
+}
+
+void CodeGenFunction::LeaveImplicitDecomposition(
+    const CXXImplicitDecompositionExpr *E) {
+  SmallVector<ImplicitDecompositionStep, 4> Steps;
+  const MaterializeTemporaryExpr *Root = nullptr;
+  if (buildImplicitDecompositionPath(getContext(), E->getOperand(), Root,
+                                     Steps) &&
+      Root)
+    ActiveImplicitDecompositions.erase(Root);
+}
+
+const Expr *CodeGenFunction::getImplicitDecompositionOperand(
+    const MaterializeTemporaryExpr *E) const {
+  auto It = ActiveImplicitDecompositions.find(E);
+  return It == ActiveImplicitDecompositions.end() ? nullptr : It->second;
+}
 
 //===--------------------------------------------------------------------===//
 //                        Miscellaneous Helper Methods
@@ -1730,6 +1977,12 @@ LValue CodeGenFunction::EmitLValueHelper(const Expr *E,
     return EmitCoyieldLValue(cast<CoyieldExpr>(E));
   case Expr::PackIndexingExprClass:
     return EmitLValue(cast<PackIndexingExpr>(E)->getSelectedExpr());
+  case Expr::CXXImplicitDecompositionExprClass: {
+    auto *IDE = cast<CXXImplicitDecompositionExpr>(E);
+    EnterImplicitDecomposition(IDE);
+    auto Leave = llvm::make_scope_exit([&] { LeaveImplicitDecomposition(IDE); });
+    return EmitLValue(IDE->getOperand(), IsKnownNonNull);
+  }
   case Expr::CXXDecomposedObjectExprClass:
     if (cast<CXXDecomposedObjectExpr>(E)->isPreDecompositionAddress())
       llvm_unreachable("pre-decomposition address is not an lvalue");

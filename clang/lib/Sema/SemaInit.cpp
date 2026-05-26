@@ -12,6 +12,7 @@
 
 #include "CheckExprLifetime.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/CXXInheritance.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
@@ -27,6 +28,7 @@
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Ownership.h"
+#include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaHLSL.h"
 #include "clang/Sema/SemaObjC.h"
 #include "llvm/ADT/APInt.h"
@@ -42,6 +44,240 @@ using namespace clang;
 //===----------------------------------------------------------------------===//
 // Sema Initialization Checking
 //===----------------------------------------------------------------------===//
+
+namespace {
+
+struct ImplicitDecompositionStep {
+  enum StepKind { SK_Base, SK_Field, SK_ArrayElement } Kind;
+  const CXXBaseSpecifier *BaseSpec = nullptr;
+  const FieldDecl *Field = nullptr;
+  uint64_t ArrayIndex = 0;
+
+  explicit ImplicitDecompositionStep(const CXXBaseSpecifier *BaseSpec)
+      : Kind(SK_Base), BaseSpec(BaseSpec) {}
+  explicit ImplicitDecompositionStep(const clang::FieldDecl *FD)
+      : Kind(SK_Field), Field(FD) {}
+  explicit ImplicitDecompositionStep(uint64_t ArrayIndex)
+      : Kind(SK_ArrayElement), ArrayIndex(ArrayIndex) {}
+};
+
+static bool buildImplicitDecompositionPath(
+    ASTContext &Ctx, const Expr *E, const MaterializeTemporaryExpr *&Root,
+    SmallVectorImpl<ImplicitDecompositionStep> &Steps) {
+  E = E->IgnoreParens();
+
+  if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E)) {
+    Root = MTE;
+    return true;
+  }
+
+  if (const auto *BTE = dyn_cast<CXXBindTemporaryExpr>(E))
+    return buildImplicitDecompositionPath(Ctx, BTE->getSubExpr(), Root, Steps);
+
+  if (const auto *CE = dyn_cast<CastExpr>(E)) {
+    if (CE->getCastKind() == CK_NoOp ||
+        CE->getCastKind() == CK_ArrayToPointerDecay)
+      return buildImplicitDecompositionPath(Ctx, CE->getSubExpr(), Root, Steps);
+
+    if ((CE->getCastKind() == CK_DerivedToBase ||
+         CE->getCastKind() == CK_UncheckedDerivedToBase) &&
+        E->getType()->isRecordType()) {
+      if (!buildImplicitDecompositionPath(Ctx, CE->getSubExpr(), Root, Steps))
+        return false;
+      for (const auto *Base : CE->path())
+        Steps.push_back(ImplicitDecompositionStep(Base));
+      return true;
+    }
+
+    return false;
+  }
+
+  if (const auto *ME = dyn_cast<MemberExpr>(E)) {
+    if (ME->isArrow())
+      return false;
+    const auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
+    if (!FD || FD->isBitField() || FD->getType()->isReferenceType())
+      return false;
+    if (!buildImplicitDecompositionPath(Ctx, ME->getBase(), Root, Steps))
+      return false;
+    Steps.push_back(ImplicitDecompositionStep(FD));
+    return true;
+  }
+
+  if (const auto *ASE = dyn_cast<ArraySubscriptExpr>(E)) {
+    Expr::EvalResult IndexResult;
+    if (!ASE->getIdx()->EvaluateAsInt(IndexResult, Ctx) ||
+        !IndexResult.Val.isInt())
+      return false;
+    if (!buildImplicitDecompositionPath(Ctx, ASE->getBase(), Root, Steps))
+      return false;
+    Steps.push_back(ImplicitDecompositionStep(
+        IndexResult.Val.getInt().getExtValue()));
+    return true;
+  }
+
+  if (const auto *BO = dyn_cast<BinaryOperator>(E)) {
+    if (BO->getOpcode() != BO_PtrMemD)
+      return false;
+
+    Expr::EvalResult MemberPtrResult;
+    if (!BO->getRHS()->EvaluateAsRValue(MemberPtrResult, Ctx) ||
+        !MemberPtrResult.Val.isMemberPointer())
+      return false;
+
+    const auto *FD = dyn_cast_or_null<FieldDecl>(
+        MemberPtrResult.Val.getMemberPointerDecl());
+    if (!FD || FD->isBitField() || FD->getType()->isReferenceType())
+      return false;
+
+    if (!buildImplicitDecompositionPath(Ctx, BO->getLHS(), Root, Steps))
+      return false;
+
+    const auto *ObjectRD = BO->getLHS()->getType()->getAsCXXRecordDecl();
+    const auto *FieldParent = dyn_cast<CXXRecordDecl>(FD->getParent());
+    if (!ObjectRD || !FieldParent)
+      return false;
+
+    if (ObjectRD != FieldParent) {
+      CXXBasePaths Paths;
+      Paths.setOrigin(const_cast<CXXRecordDecl *>(ObjectRD));
+      if (!ObjectRD->lookupInBases(
+              [&](const CXXBaseSpecifier *Base, CXXBasePath &Path) {
+                return Ctx.hasSameType(Base->getType(),
+                                       Ctx.getRecordType(FieldParent));
+              },
+              Paths))
+        return false;
+
+      QualType BaseType = Ctx.getRecordType(FieldParent);
+      if (Paths.isAmbiguous(Ctx.getCanonicalType(BaseType)))
+        return false;
+
+      for (const auto &Element : Paths.front())
+        Steps.push_back(ImplicitDecompositionStep(Element.Base));
+    }
+
+    Steps.push_back(ImplicitDecompositionStep(FD));
+    return true;
+  }
+
+  return false;
+}
+
+static bool areImplicitDecompositionSubobjectsAccessible(
+    const CXXRecordDecl *RD) {
+  if (!RD || !RD->hasDefinition())
+    return false;
+
+  for (const auto &Base : RD->bases()) {
+    if (Base.getAccessSpecifier() != AS_public)
+      return false;
+    if (!areImplicitDecompositionSubobjectsAccessible(
+            Base.getType()->getAsCXXRecordDecl()))
+      return false;
+  }
+
+  for (const auto *FD : RD->fields()) {
+    if (FD->isUnnamedBitField())
+      continue;
+    if (FD->getAccess() != AS_public)
+      return false;
+    if (const auto *SubRD = FD->getType()->getAsCXXRecordDecl())
+      if (!areImplicitDecompositionSubobjectsAccessible(SubRD))
+        return false;
+  }
+
+  return true;
+}
+
+static ExprResult maybeBuildImplicitTemporaryDecomposition(Sema &S, Expr *Init) {
+  if (!Init || !Init->getType()->isRecordType())
+    return Init;
+
+  Expr::Classification VC = Init->Classify(S.Context);
+  if (!VC.isXValue())
+    return Init;
+
+  SmallVector<ImplicitDecompositionStep, 4> Steps;
+  const MaterializeTemporaryExpr *Root = nullptr;
+  if (!buildImplicitDecompositionPath(S.Context, Init, Root, Steps) || !Root ||
+      Steps.empty())
+    return Init;
+
+  if (auto *RootRD = Root->getType()->getAsCXXRecordDecl()) {
+    if (!RootRD->hasDefinition() || RootRD->getNumVBases() != 0)
+      return Init;
+
+    if (const auto *Dtor = RootRD->getDestructor();
+        Dtor && Dtor->isUserProvided())
+      return Init;
+
+    if (!areImplicitDecompositionSubobjectsAccessible(RootRD))
+      return Init;
+  } else if (!S.Context.getAsArrayType(Root->getType())) {
+    return Init;
+  }
+
+  return new (S.Context) CXXImplicitDecompositionExpr(Init->getType(), Init);
+}
+
+static ExprResult maybeBuildImplicitDecompositionInitialization(
+    Sema &S, const InitializedEntity &Entity, Expr *Init) {
+  if (!Init || !S.getLangOpts().CPlusPlus26 || Entity.getType()->isReferenceType())
+    return Init;
+
+  const auto *IDE =
+      dyn_cast<CXXImplicitDecompositionExpr>(Init->IgnoreParenImpCasts());
+  if (!IDE)
+    return Init;
+
+  if (!S.Context.hasSameUnqualifiedType(Entity.getType(), Init->getType()))
+    return Init;
+
+  return new (S.Context) CXXRelocExpr(Entity.getType(), Init,
+                                      Init->getExprLoc());
+}
+
+static ExprResult maybeBuildRelocParameterInitialization(
+    Sema &S, const InitializedEntity &Entity, Expr *Init) {
+  if (!Init || !Entity.isParameterKind())
+    return Init;
+
+  const auto *Param = dyn_cast_or_null<ParmVarDecl>(Entity.getDecl());
+  if (!Param || !Param->isRelocParameter())
+    return Init;
+
+  const auto *Reloc = dyn_cast<CXXRelocExpr>(Init->IgnoreParenImpCasts());
+  if (!Reloc)
+    return Init;
+
+  if (!Reloc->getOperand()->isGLValue())
+    return Init;
+
+  Expr *Operand = Reloc->getOperand();
+  ExprResult Addr;
+  if (isa<CXXImplicitDecompositionExpr>(Operand->IgnoreParenImpCasts())) {
+    Addr = UnaryOperator::Create(
+        S.Context, Operand, UO_AddrOf,
+        S.Context.getPointerType(Operand->getType()), VK_PRValue, OK_Ordinary,
+        Reloc->getRelocLoc(), /*CanOverflow=*/false, FPOptionsOverride());
+  } else {
+    Addr = S.CreateBuiltinUnaryOp(Reloc->getRelocLoc(), UO_AddrOf, Operand);
+    if (Addr.isInvalid())
+      return ExprError();
+  }
+
+  auto *Relocate =
+      new (S.Context) CXXRelocateExpr(Entity.getType(), Addr.get(),
+                                      Reloc->getRelocLoc(),
+                                      /*Reclaim=*/false,
+                                      /*OperatorDelete=*/nullptr);
+
+  return Relocate;
+}
+
+
+} // namespace
 
 /// Check whether T is compatible with a wide character type (wchar_t,
 /// char16_t or char32_t).
@@ -4353,12 +4589,33 @@ static OverloadingResult ResolveConstructorOverload(
   CandidateSet.clear(OverloadCandidateSet::CSK_InitByConstructor);
   CandidateSet.setDestAS(DestType.getQualifiers().getAddressSpace());
 
+  auto IsRelocGlvalueArg = [](Expr *Arg) {
+    const auto *RE = dyn_cast<CXXRelocExpr>(Arg->IgnoreParenImpCasts());
+    return RE && RE->getOperand()->isGLValue();
+  };
+
+  bool PreferRelocConstructors =
+      Args.size() == 1 && IsRelocGlvalueArg(Args[0]) &&
+      llvm::any_of(Ctors, [&](NamedDecl *D) {
+        auto Info = getConstructorInfo(D);
+        return Info.Constructor && !Info.Constructor->isInvalidDecl() &&
+               Info.Constructor->getNumParams() != 0 &&
+               (!OnlyListConstructors ||
+                S.isInitListConstructor(Info.Constructor)) &&
+               Info.Constructor->getParamDecl(0)->isRelocParameter();
+      });
+
   for (NamedDecl *D : Ctors) {
     auto Info = getConstructorInfo(D);
     if (!Info.Constructor || Info.Constructor->isInvalidDecl())
       continue;
 
     if (OnlyListConstructors && !S.isInitListConstructor(Info.Constructor))
+      continue;
+
+    if (PreferRelocConstructors && Info.Constructor->getNumParams() != 0 &&
+        !Info.Constructor->getParamDecl(0)->isRelocParameter() &&
+        hasCopyOrMoveCtorParam(S.Context, Info))
       continue;
 
     // C++11 [over.best.ics]p4:
@@ -4504,7 +4761,9 @@ static void TryConstructorInitialization(Sema &S,
   // ObjC++: Lambda captured by the block in the lambda to block conversion
   // should avoid copy elision.
   if (S.getLangOpts().CPlusPlus17 && !RequireActualConstructor &&
-      UnwrappedArgs.size() == 1 && UnwrappedArgs[0]->isPRValue() &&
+      UnwrappedArgs.size() == 1 &&
+      !isa<CXXRelocExpr>(UnwrappedArgs[0]->IgnoreParenImpCasts()) &&
+      UnwrappedArgs[0]->isPRValue() &&
       S.Context.hasSameUnqualifiedType(UnwrappedArgs[0]->getType(), DestType)) {
     if (ILE && !DestType->isAggregateType()) {
       // CWG2311: T{ prvalue_of_type_T } is not eligible for copy elision
@@ -6600,6 +6859,32 @@ void InitializationSequence::InitializeFrom(Sema &S,
               Initializer) ||
           S.ObjC().CheckConversionToObjCLiteral(DestType, Initializer))
         Args[0] = Initializer;
+    }
+    if (S.getLangOpts().CPlusPlus26)
+      if (ExprResult ImplicitDecomp =
+              maybeBuildImplicitTemporaryDecomposition(S, Initializer);
+          !ImplicitDecomp.isInvalid() && ImplicitDecomp.get() != Initializer) {
+        Initializer = ImplicitDecomp.get();
+        Args[0] = Initializer;
+      }
+    if (ExprResult ImplicitDecompInit =
+            maybeBuildImplicitDecompositionInitialization(S, Entity,
+                                                         Initializer);
+        ImplicitDecompInit.isInvalid()) {
+      SetFailed(FK_ConversionFailed);
+      return;
+    } else if (ImplicitDecompInit.get() != Initializer) {
+      Initializer = ImplicitDecompInit.get();
+      Args[0] = Initializer;
+    }
+    if (ExprResult RelocParamInit =
+            maybeBuildRelocParameterInitialization(S, Entity, Initializer);
+        RelocParamInit.isInvalid()) {
+      SetFailed(FK_ConversionFailed);
+      return;
+    } else if (RelocParamInit.get() != Initializer) {
+      Initializer = RelocParamInit.get();
+      Args[0] = Initializer;
     }
     if (!isa<InitListExpr>(Initializer))
       SourceType = Initializer->getType();

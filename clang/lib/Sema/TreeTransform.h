@@ -3678,6 +3678,17 @@ public:
     return SemaRef.ActOnRelocExpr(SemaRef.getCurScope(), Loc, Arg);
   }
 
+  ExprResult RebuildCXXRelocateExpr(const CXXRelocateExpr *Old, Expr *Arg) {
+    return new (SemaRef.Context) CXXRelocateExpr(
+        Old->getType(), Arg, Old->getBuiltinLoc(), Old->isReclaiming(),
+        Old->getOperatorDelete());
+  }
+
+  ExprResult RebuildCXXImplicitDecompositionExpr(Expr *Arg) {
+    return new (SemaRef.Context) CXXImplicitDecompositionExpr(Arg->getType(),
+                                                              Arg);
+  }
+
   ExprResult RebuildCXXDecomposedObjectExpr(const CXXDecomposedObjectExpr *Old,
                                             Expr *Arg) {
     return new (SemaRef.Context) CXXDecomposedObjectExpr(
@@ -16107,6 +16118,32 @@ ExprResult TreeTransform<Derived>::TransformCXXRelocExpr(CXXRelocExpr *E) {
     return E;
 
   return getDerived().RebuildCXXRelocExpr(E->getRelocLoc(), SubExpr.get());
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformCXXRelocateExpr(
+    CXXRelocateExpr *E) {
+  ExprResult SubExpr = getDerived().TransformExpr(E->getOperand());
+  if (SubExpr.isInvalid())
+    return ExprError();
+
+  if (!getDerived().AlwaysRebuild() && SubExpr.get() == E->getOperand())
+    return E;
+
+  return getDerived().RebuildCXXRelocateExpr(E, SubExpr.get());
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformCXXImplicitDecompositionExpr(
+    CXXImplicitDecompositionExpr *E) {
+  ExprResult SubExpr = getDerived().TransformExpr(E->getOperand());
+  if (SubExpr.isInvalid())
+    return ExprError();
+
+  if (!getDerived().AlwaysRebuild() && SubExpr.get() == E->getOperand())
+    return E;
+
+  return getDerived().RebuildCXXImplicitDecompositionExpr(SubExpr.get());
 }
 
 template<typename Derived>

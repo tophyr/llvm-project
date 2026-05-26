@@ -118,6 +118,11 @@ public:
     CGF.ErrorUnsupported(S, "aggregate expression");
   }
   void VisitParenExpr(ParenExpr *PE) { Visit(PE->getSubExpr()); }
+  void VisitCXXImplicitDecompositionExpr(CXXImplicitDecompositionExpr *E) {
+    CGF.EnterImplicitDecomposition(E);
+    Visit(E->getOperand());
+    CGF.LeaveImplicitDecomposition(E);
+  }
   void VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     Visit(GE->getResultExpr());
   }

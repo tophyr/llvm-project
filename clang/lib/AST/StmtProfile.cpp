@@ -2291,6 +2291,18 @@ void StmtProfiler::VisitCXXDecomposedObjectExpr(
 
 void StmtProfiler::VisitCXXRelocExpr(const CXXRelocExpr *S) { VisitExpr(S); }
 
+void StmtProfiler::VisitCXXRelocateExpr(const CXXRelocateExpr *S) {
+  VisitExpr(S);
+  ID.AddBoolean(S->isReclaiming());
+  if (const auto *FD = S->getOperatorDelete())
+    VisitDecl(FD);
+}
+
+void StmtProfiler::VisitCXXImplicitDecompositionExpr(
+    const CXXImplicitDecompositionExpr *S) {
+  VisitExpr(S);
+}
+
 void StmtProfiler::VisitPackExpansionExpr(const PackExpansionExpr *S) {
   VisitExpr(S);
 }

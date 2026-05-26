@@ -8124,9 +8124,38 @@ public:
     return StmtVisitorTy::Visit(E->getExpr());
   }
 
+  bool VisitCXXRelocateExpr(const CXXRelocateExpr *E) {
+    LValue LV;
+    if (!EvaluatePointer(E->getOperand(), LV, Info))
+      return false;
+
+    APValue Value;
+    if (!handleLValueToRValueConversion(Info, E, E->getType(), LV, Value))
+      return false;
+
+    return DerivedSuccess(Value, E);
+  }
+
   bool VisitExprWithCleanups(const ExprWithCleanups *E) {
     FullExpressionRAII Scope(Info);
     return StmtVisitorTy::Visit(E->getSubExpr()) && Scope.destroy();
+  }
+
+  bool VisitCXXImplicitDecompositionExpr(
+      const CXXImplicitDecompositionExpr *E) {
+    APValue Value;
+    if (!::Evaluate(Value, Info, E->getOperand()))
+      return false;
+
+    if (E->getOperand()->isGLValue()) {
+      LValue LV;
+      LV.setFrom(Info.Ctx, Value);
+      if (!handleLValueToRValueConversion(Info, E, E->getOperand()->getType(),
+                                          LV, Value))
+        return false;
+    }
+
+    return DerivedSuccess(Value, E);
   }
 
   // Temporaries are registered when created, so we don't care about
@@ -8765,6 +8794,11 @@ public:
       return Success(RefValue, E);
     }
     return true;
+  }
+
+  bool VisitCXXImplicitDecompositionExpr(
+      const CXXImplicitDecompositionExpr *E) {
+    return this->Visit(E->getOperand());
   }
 
   bool VisitBinaryOperator(const BinaryOperator *E) {
@@ -17408,8 +17442,12 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
     return CheckICE(cast<CXXDecomposedObjectExpr>(E)->getOperand(), Ctx);
   case Expr::CXXRelocExprClass:
     return CheckICE(cast<CXXRelocExpr>(E)->getOperand(), Ctx);
+  case Expr::CXXRelocateExprClass:
+    return ICEDiag(IK_NotICE, E->getBeginLoc());
   case Expr::GenericSelectionExprClass:
     return CheckICE(cast<GenericSelectionExpr>(E)->getResultExpr(), Ctx);
+  case Expr::CXXImplicitDecompositionExprClass:
+    return CheckICE(cast<CXXImplicitDecompositionExpr>(E)->getOperand(), Ctx);
   case Expr::IntegerLiteralClass:
   case Expr::FixedPointLiteralClass:
   case Expr::CharacterLiteralClass:

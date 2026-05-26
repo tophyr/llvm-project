@@ -121,6 +121,13 @@ public:
   VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *PE) {
     return Visit(PE->getReplacement());
   }
+  ComplexPairTy VisitCXXImplicitDecompositionExpr(
+      CXXImplicitDecompositionExpr *E) {
+    CGF.EnterImplicitDecomposition(E);
+    ComplexPairTy Result = Visit(E->getOperand());
+    CGF.LeaveImplicitDecomposition(E);
+    return Result;
+  }
   ComplexPairTy VisitCoawaitExpr(CoawaitExpr *S) {
     return CGF.EmitCoawaitExpr(*S).getComplexVal();
   }
