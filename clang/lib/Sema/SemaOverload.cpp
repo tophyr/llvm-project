@@ -245,6 +245,7 @@ void StandardConversionSequence::setAsIdentityConversion() {
   IsLvalueReference = true;
   BindsToFunctionLvalue = false;
   BindsToRvalue = false;
+  BindsToPrvalue = false;
   BindsImplicitObjectArgumentWithoutRefQualifier = false;
   ObjCLifetimeConversionBinding = false;
   FromBracedInitList = false;
@@ -4492,6 +4493,17 @@ isBetterReferenceBindingKind(const StandardConversionSequence &SCS1,
           !SCS2.IsLvalueReference && SCS2.BindsToFunctionLvalue);
 }
 
+static bool isBetterPrvalueValueBinding(const LangOptions &LangOpts,
+                                        const StandardConversionSequence &SCS1,
+                                        const StandardConversionSequence &SCS2) {
+  if (!LangOpts.CPlusPlus26)
+    return false;
+
+  return !SCS1.ReferenceBinding && SCS2.ReferenceBinding &&
+         SCS2.BindsToPrvalue &&
+         !SCS2.BindsImplicitObjectArgumentWithoutRefQualifier;
+}
+
 enum class FixedEnumPromotion {
   None,
   ToUnderlyingType,
@@ -4644,6 +4656,11 @@ CompareStandardConversionSequences(Sema &S, SourceLocation Loc,
     else if (isBetterReferenceBindingKind(SCS2, SCS1))
       return ImplicitConversionSequence::Worse;
   }
+
+  if (isBetterPrvalueValueBinding(S.getLangOpts(), SCS1, SCS2))
+    return ImplicitConversionSequence::Better;
+  if (isBetterPrvalueValueBinding(S.getLangOpts(), SCS2, SCS1))
+    return ImplicitConversionSequence::Worse;
 
   // Compare based on qualification conversions (C++ 13.3.3.2p3,
   // bullet 3).
@@ -5318,6 +5335,7 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.Standard.IsLvalueReference = !isRValRef;
     ICS.Standard.BindsToFunctionLvalue = T2->isFunctionType();
     ICS.Standard.BindsToRvalue = InitCategory.isRValue();
+    ICS.Standard.BindsToPrvalue = InitCategory.isPRValue();
     ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.Standard.ObjCLifetimeConversionBinding =
         (RefConv & Sema::ReferenceConversions::ObjCLifetime) != 0;
@@ -5496,6 +5514,7 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.Standard.IsLvalueReference = !isRValRef;
     ICS.Standard.BindsToFunctionLvalue = false;
     ICS.Standard.BindsToRvalue = true;
+    ICS.Standard.BindsToPrvalue = InitCategory.isPRValue();
     ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.Standard.ObjCLifetimeConversionBinding = false;
   } else if (ICS.isUserDefined()) {
@@ -5518,6 +5537,8 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.UserDefined.After.IsLvalueReference = !isRValRef;
     ICS.UserDefined.After.BindsToFunctionLvalue = false;
     ICS.UserDefined.After.BindsToRvalue = !LValRefType;
+    ICS.UserDefined.After.BindsToPrvalue =
+        InitCategory.isPRValue() && !LValRefType;
     ICS.UserDefined.After.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.UserDefined.After.ObjCLifetimeConversionBinding = false;
     ICS.UserDefined.After.FromBracedInitList = false;
@@ -6045,6 +6066,7 @@ static ImplicitConversionSequence TryObjectArgumentInitialization(
   ICS.Standard.IsLvalueReference = Method->getRefQualifier() != RQ_RValue;
   ICS.Standard.BindsToFunctionLvalue = false;
   ICS.Standard.BindsToRvalue = FromClassification.isRValue();
+  ICS.Standard.BindsToPrvalue = FromClassification.isPRValue();
   ICS.Standard.FromBracedInitList = false;
   ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier
     = (Method->getRefQualifier() == RQ_None);

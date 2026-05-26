@@ -350,6 +350,10 @@ class Sema;
     LLVM_PREFERRED_TYPE(bool)
     unsigned BindsToRvalue : 1;
 
+    /// Whether we're binding a reference directly to a prvalue.
+    LLVM_PREFERRED_TYPE(bool)
+    unsigned BindsToPrvalue : 1;
+
     /// Whether this binds an implicit object argument to a
     /// non-static member function without a ref-qualifier.
     LLVM_PREFERRED_TYPE(bool)
