@@ -3660,6 +3660,11 @@ VarDecl *BindingDecl::getHoldingVar() const {
   return VD;
 }
 
+bool BindingDecl::isRelocDecompositionBinding() const {
+  const auto *DD = dyn_cast_if_present<DecompositionDecl>(getDecomposedDecl());
+  return DD && DD->isRelocObject();
+}
+
 ArrayRef<BindingDecl *> BindingDecl::getBindingPackDecls() const {
   assert(Binding && "expecting a pack expr");
   auto *FP = cast<FunctionParmPackExpr>(Binding);

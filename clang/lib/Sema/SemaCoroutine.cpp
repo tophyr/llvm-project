@@ -1109,7 +1109,8 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
     return ExprError();
   }
 
-  if (const auto *BD = DRE ? dyn_cast<BindingDecl>(DRE->getDecl()) : nullptr) {
+  const auto *BD = DRE ? dyn_cast<BindingDecl>(DRE->getDecl()) : nullptr;
+  if (BD && !BD->isRelocDecompositionBinding()) {
     Diag(Loc, diag::err_reloc_operand_binding) << E->getSourceRange();
     return ExprError();
   }
@@ -1125,6 +1126,8 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
     if (const auto *PVD = DRE ? dyn_cast<ParmVarDecl>(DRE->getDecl()) : nullptr)
       CanRelocateSubobject =
           PVD->isRelocParameter() && PVD->getIdentifier() != nullptr;
+    else if (BD)
+      CanRelocateSubobject = BD->isRelocDecompositionBinding();
     else if (VD)
       CanRelocateSubobject = VD->isRelocObject();
 
@@ -1133,7 +1136,8 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
           << E->getSourceRange();
       return ExprError();
     }
-  } else if (!VD || !VD->hasLocalStorage()) {
+  } else if ((!VD || !VD->hasLocalStorage()) &&
+             !(BD && BD->isRelocDecompositionBinding())) {
     if (const auto *PVD = DRE ? dyn_cast<ParmVarDecl>(DRE->getDecl()) : nullptr) {
       if (PVD->isRelocParameter())
         return new (Context) CXXRelocExpr(Ty, E, Loc);

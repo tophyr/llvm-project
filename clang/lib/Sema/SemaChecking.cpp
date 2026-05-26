@@ -14293,6 +14293,10 @@ void Sema::CheckCompletedExpr(Expr *E, SourceLocation CheckLoc,
         if (!VD)
           return true;
 
+        if (const auto *BD = dyn_cast<BindingDecl>(VD))
+          if (BD->isRelocDecompositionBinding())
+            return true;
+
         if (DecltypeDepth)
           return true;
         if (TypeidDepth && isDirectTypeidOperand(DOE))

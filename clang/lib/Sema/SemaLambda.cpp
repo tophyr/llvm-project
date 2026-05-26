@@ -1945,8 +1945,15 @@ ExprResult Sema::BuildCaptureInit(const Capture &Cap,
     assert(Cap.isVariableCapture() && "unknown kind of capture");
     ValueDecl *Var = Cap.getVariable();
     Name = Var->getIdentifier();
-    Init = BuildDeclarationNameExpr(
-      CXXScopeSpec(), DeclarationNameInfo(Var->getDeclName(), Loc), Var);
+    if (const auto *BD = dyn_cast<BindingDecl>(Var);
+        BD && BD->isRelocDecompositionBinding()) {
+      DeclarationNameInfo NameInfo(Var->getDeclName(), Loc);
+      Init = BuildDeclRefExpr(const_cast<BindingDecl *>(BD), Var->getType(),
+                              VK_LValue, NameInfo);
+    } else {
+      Init = BuildDeclarationNameExpr(
+          CXXScopeSpec(), DeclarationNameInfo(Var->getDeclName(), Loc), Var);
+    }
   }
 
   // In OpenMP, the capture kind doesn't actually describe how to capture:

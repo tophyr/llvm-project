@@ -74,12 +74,18 @@ static Expr *getOverloadArgForParameter(Sema &S, const FunctionDecl *Function,
   if (!Function || ParamIndex >= Function->getNumParams())
     return Arg;
 
-  if (!getWholeDecomposedArg(Arg))
+  const auto *DOE = getWholeDecomposedArg(Arg);
+  if (!DOE)
     return Arg;
 
   const auto *Param = Function->getParamDecl(ParamIndex);
-  if (!Param->isRelocParameter())
+  if (!Param->isRelocParameter()) {
+    if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+        DRE && isa<BindingDecl>(DRE->getDecl()) &&
+        cast<BindingDecl>(DRE->getDecl())->isRelocDecompositionBinding())
+      return const_cast<Expr *>(DOE->getOperand());
     return nullptr;
+  }
 
   return new (S.Context) CXXRelocExpr(Arg->getType(), Arg, Arg->getExprLoc());
 }

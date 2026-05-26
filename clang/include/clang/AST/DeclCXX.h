@@ -4275,6 +4275,10 @@ public:
   /// Only present for user-defined bindings for tuple-like types.
   VarDecl *getHoldingVar() const;
 
+  /// Determine whether this binding names a complete object from an explicit
+  /// relocation decomposition declaration.
+  bool isRelocDecompositionBinding() const;
+
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K == Decl::Binding; }
 };

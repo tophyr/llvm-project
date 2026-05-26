@@ -856,6 +856,11 @@ Sema::ActOnDecompositionDeclarator(Scope *S, Declarator &D,
       D.setInvalidType();
   }
 
+  if (D.isRelocObject() && D.getNumTypeObjects() == 1) {
+    Diag(Decomp.getLSquareLoc(), diag::err_reloc_object_bad_type);
+    D.setInvalidType();
+  }
+
   // Constrained auto is prohibited by [decl.pre]p6, so check that here.
   if (DS.isConstrainedAuto()) {
     TemplateIdAnnotation *TemplRep = DS.getRepAsTemplateId();
@@ -1315,8 +1320,11 @@ static bool checkTupleLikeDecomposition(Sema &S,
       return true;
 
     //   e is an lvalue if the type of the entity is an lvalue reference and
-    //   an xvalue otherwise
-    if (!Src->getType()->isLValueReferenceType())
+    //   an xvalue otherwise. Explicit relocation decomposition still names the
+    //   complete subobjects of the hidden object, so form tuple-like bindings
+    //   from that lvalue object instead of forcing an xvalue get-call.
+    if (!Src->getType()->isLValueReferenceType() &&
+        !cast<DecompositionDecl>(Src)->isRelocObject())
       E = ImplicitCastExpr::Create(S.Context, E.get()->getType(), CK_NoOp,
                                    E.get(), nullptr, VK_XValue,
                                    FPOptionsOverride());
@@ -1399,6 +1407,57 @@ static bool checkTupleLikeDecomposition(Sema &S,
   return false;
 }
 
+static ExprResult BuildGetAllCall(Sema &S, Expr *Init) {
+  DeclarationName GetAllDN = S.PP.getIdentifierInfo("get_all");
+  SourceLocation Loc = Init->getExprLoc();
+
+  Expr *Arg = Init;
+  ADLResult Fns;
+  S.ArgumentDependentLookup(GetAllDN, Loc, Arg, Fns);
+  UnresolvedSet<8> Matches;
+  for (NamedDecl *D : Fns)
+    Matches.addDecl(D);
+  if (Matches.begin() == Matches.end())
+    return ExprEmpty();
+
+  Expr *GetAll = UnresolvedLookupExpr::Create(
+      S.Context, nullptr, NestedNameSpecifierLoc(), SourceLocation(),
+      DeclarationNameInfo(GetAllDN, Loc), /*RequiresADL=*/false,
+      /*Args=*/nullptr, Matches.begin(), Matches.end(),
+      /*KnownDependent=*/false,
+      /*KnownInstantiationDependent=*/false);
+  return S.BuildCallExpr(nullptr, GetAll, Loc, Arg, Loc);
+}
+
+static bool ApplyGetAllDecompositionProtocol(Sema &S, DecompositionDecl *DD,
+                                             QualType &DecompType) {
+  if (!DD->isRelocObject() || !DD->getInit())
+    return false;
+
+  Expr *Init = DD->getInit();
+  bool Applied = false;
+  while (true) {
+    ExprResult Call = BuildGetAllCall(S, Init);
+    if (Call.isInvalid()) {
+      DD->setInvalidDecl();
+      return true;
+    }
+    if (Call.isUnset())
+      break;
+
+    Init = Call.get();
+    Applied = true;
+  }
+
+  if (!Applied)
+    return false;
+
+  DD->setInit(S.MaybeCreateExprWithCleanups(Init));
+  DD->setType(Init->getType());
+  DecompType = Init->getType().getNonReferenceType();
+  return false;
+}
+
 /// Find the base class to decompose in a built-in decomposition of a class type.
 /// This base class search is, unfortunately, not quite like any other that we
 /// perform anywhere else in C++.
@@ -1476,7 +1535,8 @@ static DeclAccessPair findDecomposableBaseClass(Sema &S, SourceLocation Loc,
 static bool CheckMemberDecompositionFields(Sema &S, SourceLocation Loc,
                                            const CXXRecordDecl *OrigRD,
                                            QualType DecompType,
-                                           DeclAccessPair BasePair) {
+                                           DeclAccessPair BasePair,
+                                           bool AllowUnnamedLambdaFields) {
   const auto *RD = cast_or_null<CXXRecordDecl>(BasePair.getDecl());
   if (!RD)
     return true;
@@ -1489,9 +1549,12 @@ static bool CheckMemberDecompositionFields(Sema &S, SourceLocation Loc,
     // must all have names.
     if (!FD->getDeclName()) {
       if (RD->isLambda()) {
-        S.Diag(Loc, diag::err_decomp_decl_lambda);
-        S.Diag(RD->getLocation(), diag::note_lambda_decl);
-        return true;
+        if (!AllowUnnamedLambdaFields) {
+          S.Diag(Loc, diag::err_decomp_decl_lambda);
+          S.Diag(RD->getLocation(), diag::note_lambda_decl);
+          return true;
+        }
+        continue;
       }
 
       if (FD->isAnonymousStructOrUnion()) {
@@ -1545,7 +1608,7 @@ static bool checkMemberDecomposition(Sema &S, ArrayRef<BindingDecl*> Bindings,
   auto FlatBindingsItr = FlatBindings.begin();
 
   if (CheckMemberDecompositionFields(S, Src->getLocation(), OrigRD, DecompType,
-                                     BasePair))
+                                     BasePair, DD->isRelocObject()))
     return true;
 
   for (auto *FD : RD->fields()) {
@@ -1602,7 +1665,44 @@ void Sema::CheckCompleteDecompositionDeclaration(DecompositionDecl *DD) {
   }
 
   DecompType = DecompType.getNonReferenceType();
+  if (ApplyGetAllDecompositionProtocol(*this, DD, DecompType))
+    return;
   ArrayRef<BindingDecl*> Bindings = DD->bindings();
+
+  if (DD->isRelocObject()) {
+    bool InvalidRelocObject = false;
+    if (!DD->isLocalVarDecl() || !DD->hasLocalStorage() ||
+        DD->getStorageClass() == SC_Extern) {
+      Diag(DD->getLocation(), diag::err_reloc_object_invalid_context);
+      InvalidRelocObject = true;
+    }
+
+    const auto *RD = DecompType->getAsCXXRecordDecl();
+    bool IsArrayLike = Context.getAsConstantArrayType(DecompType) ||
+                       DecompType->getAs<VectorType>() ||
+                       DecompType->getAs<ComplexType>();
+    if ((RD && RD->isUnion()) || (!RD && !IsArrayLike)) {
+      Diag(DD->getLocation(), diag::err_reloc_object_bad_type);
+      InvalidRelocObject = true;
+    }
+
+    CXXDestructorDecl *Dtor =
+        RD ? LookupDestructor(const_cast<CXXRecordDecl *>(RD)) : nullptr;
+    if (!InvalidRelocObject && RD && RD->isCompleteDefinition() && Dtor &&
+        Dtor->isUserProvided() &&
+        !HasPrivateAccessToClass(DD->getLocation(),
+                                 const_cast<CXXRecordDecl *>(RD))) {
+      Diag(DD->getLocation(),
+           diag::err_reloc_object_user_provided_destructor)
+          << DecompType;
+      InvalidRelocObject = true;
+    }
+
+    if (InvalidRelocObject) {
+      DD->setInvalidDecl();
+      return;
+    }
+  }
 
   // C++1z [dcl.decomp]/2:
   //   If E is an array type [...]
@@ -1703,7 +1803,8 @@ UnsignedOrNone Sema::GetDecompositionElementCount(QualType T,
   unsigned NumFields = llvm::count_if(
       RD->fields(), [](FieldDecl *FD) { return !FD->isUnnamedBitField(); });
 
-  if (CheckMemberDecompositionFields(*this, Loc, OrigRD, T, BasePair))
+  if (CheckMemberDecompositionFields(*this, Loc, OrigRD, T, BasePair,
+                                     /*AllowUnnamedLambdaFields=*/false))
     return std::nullopt;
 
   return NumFields;

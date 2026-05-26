@@ -558,10 +558,18 @@ ExprResult Sema::BuildCXXTypeId(QualType TypeInfoType,
                                 SourceLocation TypeidLoc,
                                 Expr *E,
                                 SourceLocation RParenLoc) {
+  auto IsValueLikeRelocBinding = [](const CXXDecomposedObjectExpr *DOE) {
+    if (!DOE || !DOE->isWholeObject())
+      return false;
+    const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+    const auto *BD = DRE ? dyn_cast<BindingDecl>(DRE->getDecl()) : nullptr;
+    return BD && BD->isRelocDecompositionBinding();
+  };
+
   if (isa<ParenExpr>(E->IgnoreImpCasts()))
     if (const auto *DOE =
             dyn_cast<CXXDecomposedObjectExpr>(E->IgnoreParenImpCasts());
-        DOE && DOE->isWholeObject()) {
+        DOE && DOE->isWholeObject() && !IsValueLikeRelocBinding(DOE)) {
       if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand()))
         if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl()))
           Diag(DOE->getExprLoc(), diag::err_decomposed_object_value_use) << VD;
@@ -5334,13 +5342,20 @@ QualType Sema::CheckPointerToMemberOperands(ExprResult &LHS, ExprResult &RHS,
     if (const auto *DOE =
             dyn_cast<CXXDecomposedObjectExpr>(LHS.get()->IgnoreParenImpCasts());
         DOE && DOE->isWholeObject() && !RHS.get()->isValueDependent()) {
-      Expr::EvalResult ER;
-      if (!RHS.get()->EvaluateAsRValue(ER, Context) || !ER.Val.isMemberPointer()) {
-        if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand()))
-          if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl()))
-            Diag(Loc, diag::err_decomposed_object_member_pointer_not_constant)
-                << VD;
-        return QualType();
+      bool IsValueLikeRelocBinding = false;
+      if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand()))
+        if (const auto *BD = dyn_cast<BindingDecl>(DRE->getDecl()))
+          IsValueLikeRelocBinding = BD->isRelocDecompositionBinding();
+      if (!IsValueLikeRelocBinding) {
+        Expr::EvalResult ER;
+        if (!RHS.get()->EvaluateAsRValue(ER, Context) ||
+            !ER.Val.isMemberPointer()) {
+          if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand()))
+            if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl()))
+              Diag(Loc, diag::err_decomposed_object_member_pointer_not_constant)
+                  << VD;
+          return QualType();
+        }
       }
     }
 

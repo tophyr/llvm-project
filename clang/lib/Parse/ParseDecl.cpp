@@ -7033,6 +7033,13 @@ void Parser::ParseDecompositionDeclarator(Declarator &D) {
       Diag(Tok.getLocation(), diag::ext_decomp_decl_empty);
 
     T.consumeClose();
+
+    if (Tok.is(tok::identifier) && Tok.getIdentifierInfo() &&
+        Tok.getIdentifierInfo()->isStr("reloc")) {
+      D.setRelocObject(true);
+      D.SetRangeEnd(Tok.getLocation());
+      ConsumeToken();
+    }
   }
 
   PA.Commit();

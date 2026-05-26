@@ -9687,15 +9687,19 @@ QualType Sema::BuildCountAttributedArrayOrPointerType(QualType WrappedTy,
 /// that expression, according to the rules in C++11
 /// [dcl.type.simple]p4 and C++11 [expr.lambda.prim]p18.
 QualType Sema::getDecltypeForExpr(Expr *E) {
-  Expr *IDExpr = E->IgnoreParens();
-  if (auto *ImplCastExpr = dyn_cast<ImplicitCastExpr>(E))
+  Expr *IDExpr = E;
+  Expr *CoreExpr = E->IgnoreParens();
+  if (auto *ImplCastExpr = dyn_cast<ImplicitCastExpr>(E)) {
     IDExpr = ImplCastExpr->getSubExpr();
+    CoreExpr = IDExpr->IgnoreParens();
+  }
 
   if (auto *PackExpr = dyn_cast<PackIndexingExpr>(E)) {
     if (E->isInstantiationDependent())
       IDExpr = PackExpr->getPackIdExpression();
     else
       IDExpr = PackExpr->getSelectedExpr();
+    CoreExpr = IDExpr->IgnoreParens();
   }
 
   if (E->isTypeDependent())
@@ -9714,22 +9718,25 @@ QualType Sema::getDecltypeForExpr(Expr *E) {
   if (const auto *SNTTPE = dyn_cast<SubstNonTypeTemplateParmExpr>(IDExpr))
     return SNTTPE->getParameterType(Context);
 
-  if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(IDExpr)) {
+  if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(CoreExpr)) {
     if (DOE->isWholeObject()) {
-      if (E != IDExpr) {
-        if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand()))
-          if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl()))
-            Diag(E->getExprLoc(), diag::err_decomposed_object_decltype_paren)
-                << VD;
+      const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+      const auto *VD = DRE ? dyn_cast<ValueDecl>(DRE->getDecl()) : nullptr;
+      const auto *BD = VD ? dyn_cast<BindingDecl>(VD) : nullptr;
+      if (E != CoreExpr) {
+        if (BD && BD->isRelocDecompositionBinding())
+          return Context.getLValueReferenceType(VD->getType());
+        if (VD)
+          Diag(E->getExprLoc(), diag::err_decomposed_object_decltype_paren)
+              << VD;
         return QualType();
       }
-      if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand())) {
-        const auto *VD = cast<ValueDecl>(DRE->getDecl());
+      if (VD) {
         return VD->getType();
       }
     }
 
-    if (DOE->isBaseSubobject() && E == IDExpr)
+    if (DOE->isBaseSubobject() && E == CoreExpr)
       return Context.getTypeDeclType(cast<TypeDecl>(DOE->getBaseTypeDecl()));
   }
 
@@ -9764,8 +9771,8 @@ QualType Sema::getDecltypeForExpr(Expr *E) {
   //   access to a corresponding data member of the closure type that
   //   would have been declared if x were an odr-use of the denoted
   //   entity.
-  if (getCurLambda() && isa<ParenExpr>(IDExpr)) {
-    if (auto *DRE = dyn_cast<DeclRefExpr>(IDExpr->IgnoreParens())) {
+  if (getCurLambda() && isa<ParenExpr>(E)) {
+    if (auto *DRE = dyn_cast<DeclRefExpr>(CoreExpr)) {
       if (auto *Var = dyn_cast<VarDecl>(DRE->getDecl())) {
         QualType T = getCapturedDeclRefType(Var, DRE->getLocation());
         if (!T.isNull())

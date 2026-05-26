@@ -3291,6 +3291,8 @@ static void diagnoseUncapturableValueReferenceOrBinding(Sema &S,
 static bool isNamedDecomposedObject(const ValueDecl *VD) {
   if (const auto *PVD = dyn_cast<ParmVarDecl>(VD))
     return PVD->isRelocParameter() && PVD->getIdentifier() != nullptr;
+  if (const auto *BD = dyn_cast<BindingDecl>(VD))
+    return BD->isRelocDecompositionBinding();
   if (const auto *Var = dyn_cast<VarDecl>(VD))
     return Var->isRelocObject();
   return false;
@@ -18865,7 +18867,8 @@ static bool isVariableCapturable(CapturingScopeInfo *CSI, ValueDecl *Var,
     return false;
   }
 
-  if (isa<BindingDecl>(Var)) {
+  if (const auto *BD = dyn_cast<BindingDecl>(Var);
+      BD && !BD->isRelocDecompositionBinding()) {
     if (!IsLambda || !S.getLangOpts().CPlusPlus) {
       if (Diagnose)
         diagnoseUncapturableValueReferenceOrBinding(S, Loc, Var);

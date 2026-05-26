@@ -100,6 +100,9 @@ void bad_cases() {
   (void)base_object(reloc indirect.Base); // expected-error {{'reloc' operand must name a complete object}}
   auto [binding_first, binding_second] = pair;
   (void)object(reloc binding_first); // expected-error {{'reloc' operand cannot name a structured binding}}
+  auto [decomp_first, decomp_second] reloc = pair;
+  (void)object(reloc decomp_first);
+  (void)object(reloc decomp_second);
   [captured = pair.first] {
     (void)object(reloc captured); // expected-error {{'reloc' operand cannot name a lambda capture}}
   }();

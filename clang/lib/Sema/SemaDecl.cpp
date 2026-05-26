@@ -72,6 +72,36 @@
 using namespace clang;
 using namespace sema;
 
+static void CheckRelocObjectVariable(Sema &S, VarDecl *VD) {
+  bool InvalidRelocObject = false;
+  if (!VD->isLocalVarDecl() || !VD->hasLocalStorage() ||
+      VD->getStorageClass() == SC_Extern) {
+    S.Diag(VD->getLocation(), diag::err_reloc_object_invalid_context);
+    InvalidRelocObject = true;
+  }
+
+  QualType RelocType = VD->getType();
+  const auto *RD = RelocType->getAsCXXRecordDecl();
+  if (RelocType->isReferenceType() || !RD || RD->isUnion()) {
+    S.Diag(VD->getLocation(), diag::err_reloc_object_bad_type);
+    InvalidRelocObject = true;
+  }
+
+  CXXDestructorDecl *Dtor =
+      RD ? S.LookupDestructor(const_cast<CXXRecordDecl *>(RD)) : nullptr;
+  if (!InvalidRelocObject && RD->isCompleteDefinition() && Dtor &&
+      Dtor->isUserProvided() &&
+      !S.HasPrivateAccessToClass(VD->getLocation(),
+                                 const_cast<CXXRecordDecl *>(RD))) {
+    S.Diag(VD->getLocation(), diag::err_reloc_object_user_provided_destructor)
+        << RelocType;
+    InvalidRelocObject = true;
+  }
+
+  if (InvalidRelocObject)
+    VD->setInvalidDecl();
+}
+
 static bool hasRelocDecompositionAccess(Sema &S, SourceLocation Loc,
                                         CXXRecordDecl *RD,
                                         FunctionDecl *FD) {
@@ -7906,35 +7936,9 @@ NamedDecl *Sema::ActOnVariableDeclarator(
           Context, TemplateParamLists.drop_back(VDTemplateParamLists));
   }
 
-  if (D.isRelocObject()) {
-    bool InvalidRelocObject = false;
-    if (!NewVD->isLocalVarDecl() || !NewVD->hasLocalStorage() ||
-        NewVD->getStorageClass() == SC_Extern) {
-      Diag(NewVD->getLocation(), diag::err_reloc_object_invalid_context);
-      InvalidRelocObject = true;
-    }
-
-    QualType RelocType = NewVD->getType();
-    const auto *RD = RelocType->getAsCXXRecordDecl();
-    if (RelocType->isReferenceType() || !RD || RD->isUnion()) {
-      Diag(NewVD->getLocation(), diag::err_reloc_object_bad_type);
-      InvalidRelocObject = true;
-    }
-
-    CXXDestructorDecl *Dtor =
-        RD ? LookupDestructor(const_cast<CXXRecordDecl *>(RD)) : nullptr;
-    if (!InvalidRelocObject && RD->isCompleteDefinition() && Dtor &&
-        Dtor->isUserProvided() &&
-        !HasPrivateAccessToClass(NewVD->getLocation(),
-                                 const_cast<CXXRecordDecl *>(RD))) {
-      Diag(NewVD->getLocation(),
-           diag::err_reloc_object_user_provided_destructor)
-          << RelocType;
-      InvalidRelocObject = true;
-    }
-
-    if (InvalidRelocObject)
-      NewVD->setInvalidDecl();
+  if (D.isRelocObject() && !isa<DecompositionDecl>(NewVD)) {
+    if (!NewVD->getType()->getContainedDeducedType())
+      CheckRelocObjectVariable(*this, NewVD);
   }
 
   if (D.getDeclSpec().isInlineSpecified()) {
@@ -13333,6 +13337,9 @@ bool Sema::DeduceVariableDeclarationType(VarDecl *VDecl, bool DirectInit,
 
   if (getLangOpts().HLSL)
     HLSL().deduceAddressSpace(VDecl);
+
+  if (VDecl->isRelocObject() && !isa<DecompositionDecl>(VDecl))
+    CheckRelocObjectVariable(*this, VDecl);
 
   // If this is a redeclaration, check that the type we just deduced matches
   // the previously declared type.
