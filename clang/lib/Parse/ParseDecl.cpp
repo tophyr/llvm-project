@@ -6614,6 +6614,18 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
       // the l_paren token.
     }
 
+    if (Tok.is(tok::identifier) &&
+        (D.getContext() == DeclaratorContext::Prototype ||
+         D.getContext() == DeclaratorContext::LambdaExprParameter) &&
+        Tok.getIdentifierInfo() &&
+        Tok.getIdentifierInfo()->isStr("reloc")) {
+      D.setRelocParameter(true);
+      D.SetIdentifier(nullptr, Tok.getLocation());
+      D.SetRangeEnd(Tok.getLocation());
+      ConsumeToken();
+      goto PastIdentifier;
+    }
+
     if (Tok.isOneOf(tok::identifier, tok::kw_operator, tok::annot_template_id,
                     tok::tilde)) {
       // We found something that indicates the start of an unqualified-id.
@@ -6810,6 +6822,30 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
   // Don't parse attributes unless we have parsed an unparenthesized name.
   if (D.hasName() && !D.getNumTypeObjects())
     MaybeParseCXX11Attributes(D);
+
+  if (Tok.is(tok::identifier) && Tok.getIdentifierInfo() &&
+      Tok.getIdentifierInfo()->isStr("reloc")) {
+    if (D.getContext() == DeclaratorContext::Prototype ||
+        D.getContext() == DeclaratorContext::LambdaExprParameter) {
+      D.setRelocParameter(true);
+      D.SetRangeEnd(Tok.getLocation());
+      ConsumeToken();
+    } else if (D.getContext() != DeclaratorContext::TypeName &&
+               D.getContext() != DeclaratorContext::FunctionalCast &&
+               D.getContext() != DeclaratorContext::ConversionId &&
+               D.getContext() != DeclaratorContext::AliasDecl &&
+               D.getContext() != DeclaratorContext::AliasTemplate &&
+               D.getContext() != DeclaratorContext::TemplateParam &&
+               D.getContext() != DeclaratorContext::TemplateArg &&
+               D.getContext() != DeclaratorContext::TemplateTypeArg &&
+               D.getContext() != DeclaratorContext::TrailingReturn &&
+               D.getContext() != DeclaratorContext::RequiresExpr &&
+               D.getContext() != DeclaratorContext::Association) {
+      D.setRelocObject(true);
+      D.SetRangeEnd(Tok.getLocation());
+      ConsumeToken();
+    }
+  }
 
   while (true) {
     if (Tok.is(tok::l_paren)) {

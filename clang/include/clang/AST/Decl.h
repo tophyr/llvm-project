@@ -1012,6 +1012,10 @@ protected:
     LLVM_PREFERRED_TYPE(bool)
     unsigned IsObjCMethodParam : 1;
 
+    /// Whether this parameter used the relocation-parameter syntax.
+    LLVM_PREFERRED_TYPE(bool)
+    unsigned IsRelocParameter : 1;
+
     /// If IsObjCMethodParam, a Decl::ObjCDeclQualifier.
     /// Otherwise, the number of function parameter scopes enclosing
     /// the function parameter scope in which this parameter was
@@ -1073,6 +1077,10 @@ protected:
     /// init-capture.
     LLVM_PREFERRED_TYPE(bool)
     unsigned IsInitCapture : 1;
+
+    /// Whether this variable used the decomposition `reloc` syntax.
+    LLVM_PREFERRED_TYPE(bool)
+    unsigned IsRelocObject : 1;
 
     /// Whether this local extern variable's previous declaration was
     /// declared in the same block scope. This controls whether we should merge
@@ -1562,6 +1570,14 @@ public:
     NonParmVarDeclBits.IsInitCapture = IC;
   }
 
+  bool isRelocObject() const {
+    return isa<ParmVarDecl>(this) ? false : NonParmVarDeclBits.IsRelocObject;
+  }
+  void setIsRelocObject(bool Reloc) {
+    assert(!isa<ParmVarDecl>(this));
+    NonParmVarDeclBits.IsRelocObject = Reloc;
+  }
+
   /// Whether this local extern variable declaration's previous declaration
   /// was declared in the same block scope. Only correct in C++.
   bool isPreviousDeclInSameBlockScope() const {
@@ -1780,6 +1796,7 @@ protected:
     assert(ParmVarDeclBits.DefaultArgKind == DAK_None);
     assert(ParmVarDeclBits.IsKNRPromoted == false);
     assert(ParmVarDeclBits.IsObjCMethodParam == false);
+    assert(ParmVarDeclBits.IsRelocParameter == false);
     setDefaultArg(DefArg);
   }
 
@@ -1852,6 +1869,11 @@ public:
   }
   void setKNRPromoted(bool promoted) {
     ParmVarDeclBits.IsKNRPromoted = promoted;
+  }
+
+  bool isRelocParameter() const { return ParmVarDeclBits.IsRelocParameter; }
+  void setIsRelocParameter(bool Reloc) {
+    ParmVarDeclBits.IsRelocParameter = Reloc;
   }
 
   bool isExplicitObjectParameter() const {

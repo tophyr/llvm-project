@@ -11058,7 +11058,8 @@ void Sema::CheckConstructor(CXXConstructorDecl *Constructor) {
       !Constructor->isFunctionTemplateSpecialization()) {
     QualType ParamType = Constructor->getParamDecl(0)->getType();
     QualType ClassTy = Context.getTagDeclType(ClassDecl);
-    if (Context.getCanonicalType(ParamType).getUnqualifiedType() == ClassTy) {
+    if (!Constructor->getParamDecl(0)->isRelocParameter() &&
+        Context.getCanonicalType(ParamType).getUnqualifiedType() == ClassTy) {
       SourceLocation ParamLoc = Constructor->getParamDecl(0)->getLocation();
       const char *ConstRef
         = Constructor->getParamDecl(0)->getIdentifier() ? "const &"

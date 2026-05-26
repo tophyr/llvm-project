@@ -7955,6 +7955,19 @@ def err_explicit_object_parameter_nonmember: Error<
   "%select{static|virtual|non-member}0 %select{function|lambda}1">;
 def err_explicit_object_parameter_constructor: Error<
   "an explicit object parameter cannot appear in a %select{constructor|destructor}0">;
+def err_reloc_object_invalid_context : Error<
+  "'reloc' may only appear on a function parameter or local variable definition">;
+def err_reloc_object_bad_type : Error<
+  "'reloc' may only be applied to a non-union class object of non-reference type">;
+def err_reloc_parameter_invalid_context : Error<
+  "'reloc' parameter syntax is only valid on a constructor or assignment "
+  "operator parameter">;
+def err_reloc_parameter_must_be_first : Error<
+  "'reloc' parameter must be the first parameter of a constructor or "
+  "assignment operator">;
+def err_reloc_parameter_bad_type : Error<
+  "'reloc' parameter must have the same unqualified type as its enclosing "
+  "class">;
 def err_explicit_object_parameter_mutable: Error<
   "a lambda with an explicit object parameter cannot be mutable">;
 def err_invalid_explicit_object_type_in_lambda: Error<

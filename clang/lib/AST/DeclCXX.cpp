@@ -2715,6 +2715,9 @@ bool CXXMethodDecl::isCopyAssignmentOperator() const {
     return false;
 
   QualType ParamType = getNonObjectParameter(0)->getType();
+  if (getNonObjectParameter(0)->isRelocParameter())
+    return false;
+
   if (const auto *Ref = ParamType->getAs<LValueReferenceType>())
     ParamType = Ref->getPointeeType();
 
@@ -2722,6 +2725,23 @@ bool CXXMethodDecl::isCopyAssignmentOperator() const {
   QualType ClassType
     = Context.getCanonicalType(Context.getTypeDeclType(getParent()));
   return Context.hasSameUnqualifiedType(ClassType, ParamType);
+}
+
+bool CXXMethodDecl::isRelocationAssignmentOperator() const {
+  if (getOverloadedOperator() != OO_Equal || isStatic() ||
+      getPrimaryTemplate() || getDescribedFunctionTemplate() ||
+      getNumExplicitParams() != 1)
+    return false;
+
+  const ParmVarDecl *Param = getNonObjectParameter(0);
+  if (!Param->isRelocParameter())
+    return false;
+
+  ASTContext &Context = getASTContext();
+  QualType ParamType = Context.getCanonicalType(Param->getType());
+  QualType ClassType =
+      Context.getCanonicalType(Context.getTypeDeclType(getParent()));
+  return Context.hasSameUnqualifiedType(ParamType, ClassType);
 }
 
 bool CXXMethodDecl::isMoveAssignmentOperator() const {
@@ -3006,6 +3026,22 @@ CXXConstructorDecl::isCopyConstructor(unsigned &TypeQuals) const {
 bool CXXConstructorDecl::isMoveConstructor(unsigned &TypeQuals) const {
   return isCopyOrMoveConstructor(TypeQuals) &&
          getParamDecl(0)->getType()->isRValueReferenceType();
+}
+
+bool CXXConstructorDecl::isRelocationConstructor() const {
+  if (!hasOneParamOrDefaultArgs() || getPrimaryTemplate() != nullptr ||
+      getDescribedFunctionTemplate() != nullptr)
+    return false;
+
+  const ParmVarDecl *Param = getParamDecl(0);
+  if (!Param->isRelocParameter())
+    return false;
+
+  ASTContext &Context = getASTContext();
+  CanQualType ParamType = Context.getCanonicalType(Param->getType());
+  CanQualType ClassTy =
+      Context.getCanonicalType(Context.getTagDeclType(getParent()));
+  return ParamType.getUnqualifiedType() == ClassTy;
 }
 
 /// Determine whether this is a copy or move constructor.

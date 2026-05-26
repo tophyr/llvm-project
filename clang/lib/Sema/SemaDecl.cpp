@@ -7839,6 +7839,9 @@ NamedDecl *Sema::ActOnVariableDeclarator(
         NewTemplate->setInvalidDecl();
     }
 
+    if (D.isRelocObject())
+      NewVD->setIsRelocObject(true);
+
     SetNestedNameSpecifier(*this, NewVD, D);
 
     // If we have any template parameter lists that don't directly belong to
@@ -7850,6 +7853,25 @@ NamedDecl *Sema::ActOnVariableDeclarator(
     if (TemplateParamLists.size() > VDTemplateParamLists)
       NewVD->setTemplateParameterListsInfo(
           Context, TemplateParamLists.drop_back(VDTemplateParamLists));
+  }
+
+  if (D.isRelocObject()) {
+    bool InvalidRelocObject = false;
+    if (!NewVD->isLocalVarDecl() || !NewVD->hasLocalStorage() ||
+        NewVD->getStorageClass() == SC_Extern) {
+      Diag(NewVD->getLocation(), diag::err_reloc_object_invalid_context);
+      InvalidRelocObject = true;
+    }
+
+    QualType RelocType = NewVD->getType();
+    const auto *RD = RelocType->getAsCXXRecordDecl();
+    if (RelocType->isReferenceType() || !RD || RD->isUnion()) {
+      Diag(NewVD->getLocation(), diag::err_reloc_object_bad_type);
+      InvalidRelocObject = true;
+    }
+
+    if (InvalidRelocObject)
+      NewVD->setInvalidDecl();
   }
 
   if (D.getDeclSpec().isInlineSpecified()) {
@@ -10442,6 +10464,42 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
 
   // Finally, we know we have the right number of parameters, install them.
   NewFD->setParams(Params);
+
+  if (getLangOpts().CPlusPlus) {
+    for (unsigned I = 0, E = Params.size(); I != E; ++I) {
+      ParmVarDecl *Param = Params[I];
+      if (!Param->isRelocParameter())
+        continue;
+
+      auto *Ctor = dyn_cast<CXXConstructorDecl>(NewFD);
+      if (I != 0) {
+        Diag(Param->getLocation(), diag::err_reloc_parameter_must_be_first);
+        NewFD->setInvalidDecl();
+        continue;
+      }
+
+      if (Ctor) {
+        if (!Ctor->isRelocationConstructor()) {
+          Diag(Param->getLocation(), diag::err_reloc_parameter_bad_type);
+          NewFD->setInvalidDecl();
+        }
+        continue;
+      }
+
+      auto *Method = dyn_cast<CXXMethodDecl>(NewFD);
+      if (Method && Method->isRelocationAssignmentOperator())
+        continue;
+
+      if (Method && Method->getOverloadedOperator() == OO_Equal) {
+        Diag(Param->getLocation(), diag::err_reloc_parameter_bad_type);
+        NewFD->setInvalidDecl();
+        continue;
+      }
+
+      Diag(Param->getLocation(), diag::err_reloc_parameter_invalid_context);
+      NewFD->setInvalidDecl();
+    }
+  }
 
   // If this declarator is a declaration and not a definition, its parameters
   // will not be pushed onto a scope chain. That means we will not issue any
@@ -15402,6 +15460,9 @@ Decl *Sema::ActOnParamDeclarator(Scope *S, Declarator &D,
       CheckParameter(Context.getTranslationUnitDecl(), D.getBeginLoc(),
                      D.getIdentifierLoc(), II, parmDeclType, TInfo, SC);
 
+  if (D.isRelocParameter())
+    New->setIsRelocParameter(true);
+
   if (D.isInvalidType())
     New->setInvalidDecl();
 
@@ -18771,6 +18832,11 @@ FieldDecl *Sema::HandleField(Scope *S, RecordDecl *Record,
     Diag(Decomp.getLSquareLoc(), diag::err_decomp_decl_context)
       << Decomp.getSourceRange();
     return nullptr;
+  }
+
+  if (D.isRelocObject()) {
+    Diag(D.getIdentifierLoc(), diag::err_reloc_object_invalid_context);
+    D.setInvalidType(true);
   }
 
   const IdentifierInfo *II = D.getIdentifier();

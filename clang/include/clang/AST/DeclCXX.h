@@ -2214,6 +2214,9 @@ public:
   /// of whether it was declared implicitly or explicitly.
   bool isCopyAssignmentOperator() const;
 
+  /// Determine whether this is a relocation assignment operator.
+  bool isRelocationAssignmentOperator() const;
+
   /// Determine whether this is a move assignment operator.
   bool isMoveAssignmentOperator() const;
 
@@ -2798,6 +2801,9 @@ public:
     unsigned TypeQuals = 0;
     return isMoveConstructor(TypeQuals);
   }
+
+  /// Determine whether this constructor is a relocation constructor.
+  bool isRelocationConstructor() const;
 
   /// Determine whether this is a copy or move constructor.
   ///
