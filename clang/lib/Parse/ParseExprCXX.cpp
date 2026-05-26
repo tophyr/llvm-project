@@ -1581,7 +1581,8 @@ ExprResult Parser::ParseCXXTypeid() {
   // names, and must treat them as unevaluated.
   EnterExpressionEvaluationContext Unevaluated(
       Actions, Sema::ExpressionEvaluationContext::Unevaluated,
-      Sema::ReuseLambdaContextDecl);
+      Sema::ReuseLambdaContextDecl,
+      Sema::ExpressionEvaluationContextRecord::EK_Typeid);
 
   if (isTypeIdInParens()) {
     TypeResult Ty = ParseTypeName();

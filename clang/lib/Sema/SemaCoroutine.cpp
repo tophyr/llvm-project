@@ -1022,6 +1022,8 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
 
   auto GetRelocReferenceType = [](Expr *Operand) -> QualType {
     Operand = Operand->IgnoreParens();
+    while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(Operand))
+      Operand = DOE->getOperand()->IgnoreParens();
 
     if (const auto *DRE = dyn_cast<DeclRefExpr>(Operand)) {
       if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl())) {
@@ -1040,6 +1042,36 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
     return QualType();
   };
 
+  auto SkipRelocSubobjectCasts = [](const Expr *Operand) -> const Expr * {
+    Operand = Operand->IgnoreParens();
+    while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(Operand))
+      Operand = DOE->getOperand()->IgnoreParens();
+    while (const auto *CE = dyn_cast<CastExpr>(Operand))
+      Operand = CE->getSubExpr()->IgnoreParens();
+    return Operand;
+  };
+
+  auto FindRelocRootDeclRef =
+      [&SkipRelocSubobjectCasts](Expr *Operand) -> const DeclRefExpr * {
+    const Expr *Root = SkipRelocSubobjectCasts(Operand);
+    while (const auto *ME = dyn_cast<MemberExpr>(Root))
+      Root = SkipRelocSubobjectCasts(ME->getBase());
+    return dyn_cast<DeclRefExpr>(Root);
+  };
+
+  auto IsRelocDecompositionSubobject =
+      [](Expr *Operand) -> bool {
+    Operand = Operand->IgnoreParens();
+    if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(Operand))
+      return DOE->isBaseSubobject();
+    const Expr *Node = Operand;
+    while (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(Node))
+      Node = DOE->getOperand()->IgnoreParens();
+    while (const auto *CE = dyn_cast<CastExpr>(Node))
+      Node = CE->getSubExpr()->IgnoreParens();
+    return isa<MemberExpr>(Node) || isa<CastExpr>(Operand->IgnoreParens());
+  };
+
   QualType Ty = E->getType();
   if (Ty.isNull() || Ty->isVoidType() || Ty->isFunctionType()) {
     Diag(Loc, diag::err_reloc_operand_not_glvalue) << E->getSourceRange();
@@ -1056,6 +1088,18 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
   }
 
   Expr *Operand = E->IgnoreParens();
+  if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(Operand)) {
+    if (DOE->isWholeObject()) {
+      Diag(Loc, diag::err_reloc_operand_not_complete_object)
+          << E->getSourceRange();
+      return ExprError();
+    }
+    if (!DOE->isDirectBaseSubobject() || DOE->isVirtualBaseSubobject()) {
+      Diag(Loc, diag::err_reloc_operand_not_complete_object)
+          << E->getSourceRange();
+      return ExprError();
+    }
+  }
   if (QualType RefTy = GetRelocReferenceType(Operand); !RefTy.isNull()) {
     TypeSourceInfo *TSI = Context.getTrivialTypeSourceInfo(RefTy, Loc);
     return BuildCXXNamedCast(Loc, tok::kw_static_cast, TSI, E,
@@ -1063,13 +1107,7 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
                              SourceRange(Loc, E->getEndLoc()));
   }
 
-  if (isa<MemberExpr>(Operand)) {
-    Diag(Loc, diag::err_reloc_operand_not_complete_object)
-        << E->getSourceRange();
-    return ExprError();
-  }
-
-  const auto *DRE = dyn_cast<DeclRefExpr>(Operand);
+  const auto *DRE = FindRelocRootDeclRef(Operand);
   if (DRE && DRE->refersToEnclosingVariableOrCapture()) {
     Diag(Loc, diag::err_reloc_operand_capture) << E->getSourceRange();
     return ExprError();
@@ -1085,7 +1123,25 @@ ExprResult Sema::ActOnRelocExpr(Scope *S, SourceLocation Loc, Expr *E) {
     Diag(Loc, diag::err_reloc_operand_capture) << E->getSourceRange();
     return ExprError();
   }
-  if (!VD || !VD->hasLocalStorage()) {
+
+  if (IsRelocDecompositionSubobject(Operand)) {
+    bool CanRelocateSubobject = false;
+    if (const auto *PVD = DRE ? dyn_cast<ParmVarDecl>(DRE->getDecl()) : nullptr)
+      CanRelocateSubobject =
+          PVD->isRelocParameter() && PVD->getIdentifier() != nullptr;
+    else if (VD)
+      CanRelocateSubobject = VD->isRelocObject();
+
+    if (!CanRelocateSubobject) {
+      Diag(Loc, diag::err_reloc_operand_not_complete_object)
+          << E->getSourceRange();
+      return ExprError();
+    }
+  } else if (!VD || !VD->hasLocalStorage()) {
+    if (const auto *PVD = DRE ? dyn_cast<ParmVarDecl>(DRE->getDecl()) : nullptr) {
+      if (PVD->isRelocParameter())
+        return new (Context) CXXRelocExpr(Ty, E, Loc);
+    }
     Diag(Loc, diag::err_reloc_operand_not_local) << E->getSourceRange();
     return ExprError();
   }

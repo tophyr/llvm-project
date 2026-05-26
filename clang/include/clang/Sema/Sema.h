@@ -6777,6 +6777,7 @@ public:
     /// to handle differently.
     enum ExpressionKind {
       EK_Decltype,
+      EK_Typeid,
       EK_TemplateArgument,
       EK_AttrArgument,
       EK_VariableInit,

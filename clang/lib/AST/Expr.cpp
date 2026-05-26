@@ -2640,6 +2640,8 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
   case CoyieldExprClass:
     return cast<CoroutineSuspendExpr>(this)->getResumeExpr()->
       isUnusedResultAWarning(WarnE, Loc, R1, R2, Ctx);
+  case CXXDecomposedObjectExprClass:
+    return false;
   case CXXRelocExprClass:
     return false;
   case ChooseExprClass:
@@ -3642,6 +3644,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case TypeTraitExprClass:
   case ArrayTypeTraitExprClass:
   case ExpressionTraitExprClass:
+  case CXXDecomposedObjectExprClass:
   case CXXNoexceptExprClass:
   case CXXRelocExprClass:
   case SizeOfPackExprClass:

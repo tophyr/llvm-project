@@ -9687,8 +9687,7 @@ QualType Sema::BuildCountAttributedArrayOrPointerType(QualType WrappedTy,
 /// that expression, according to the rules in C++11
 /// [dcl.type.simple]p4 and C++11 [expr.lambda.prim]p18.
 QualType Sema::getDecltypeForExpr(Expr *E) {
-
-  Expr *IDExpr = E;
+  Expr *IDExpr = E->IgnoreParens();
   if (auto *ImplCastExpr = dyn_cast<ImplicitCastExpr>(E))
     IDExpr = ImplCastExpr->getSubExpr();
 
@@ -9714,6 +9713,25 @@ QualType Sema::getDecltypeForExpr(Expr *E) {
   // it unconditionally.
   if (const auto *SNTTPE = dyn_cast<SubstNonTypeTemplateParmExpr>(IDExpr))
     return SNTTPE->getParameterType(Context);
+
+  if (const auto *DOE = dyn_cast<CXXDecomposedObjectExpr>(IDExpr)) {
+    if (DOE->isWholeObject()) {
+      if (E != IDExpr) {
+        if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand()))
+          if (const auto *VD = dyn_cast<ValueDecl>(DRE->getDecl()))
+            Diag(E->getExprLoc(), diag::err_decomposed_object_decltype_paren)
+                << VD;
+        return QualType();
+      }
+      if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand())) {
+        const auto *VD = cast<ValueDecl>(DRE->getDecl());
+        return VD->getType();
+      }
+    }
+
+    if (DOE->isBaseSubobject() && E == IDExpr)
+      return Context.getTypeDeclType(cast<TypeDecl>(DOE->getBaseTypeDecl()));
+  }
 
   //     - if e is an unparenthesized id-expression or an unparenthesized class
   //       member access (5.2.5), decltype(e) is the type of the entity named
@@ -9770,7 +9788,10 @@ QualType Sema::BuildDecltypeType(Expr *E, bool AsUnevaluated) {
     // used to build SFINAE gadgets.
     Diag(E->getExprLoc(), diag::warn_side_effects_unevaluated_context);
   }
-  return Context.getDecltypeType(E, getDecltypeForExpr(E));
+  QualType T = getDecltypeForExpr(E);
+  if (T.isNull())
+    return QualType();
+  return Context.getDecltypeType(E, T);
 }
 
 QualType Sema::ActOnPackIndexingType(QualType Pattern, Expr *IndexExpr,

@@ -2714,6 +2714,8 @@ DEF_TRAVERSE_STMT(CXXTypeidExpr, {
     TRY_TO(TraverseTypeLoc(S->getTypeOperandSourceInfo()->getTypeLoc()));
 })
 
+DEF_TRAVERSE_STMT(CXXDecomposedObjectExpr, {})
+
 DEF_TRAVERSE_STMT(MSPropertyRefExpr, {
   TRY_TO(TraverseNestedNameSpecifierLoc(S->getQualifierLoc()));
 })

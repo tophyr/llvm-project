@@ -121,6 +121,9 @@ public:
   void VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     Visit(GE->getResultExpr());
   }
+  void VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+    Visit(E->getOperand());
+  }
   void VisitCoawaitExpr(CoawaitExpr *E) {
     CGF.EmitCoawaitExpr(*E, Dest, IsResultUnused);
   }

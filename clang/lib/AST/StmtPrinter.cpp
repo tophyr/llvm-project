@@ -2628,6 +2628,14 @@ void StmtPrinter::VisitCXXRelocExpr(CXXRelocExpr *E) {
   PrintExpr(E->getOperand());
 }
 
+void StmtPrinter::VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+  PrintExpr(E->getOperand());
+  if (E->isBaseSubobject())
+    OS << '.' << E->getBaseTypeDecl()->getName();
+  else if (E->isPreDecompositionAddress())
+    OS << ".this";
+}
+
 void StmtPrinter::VisitPackExpansionExpr(PackExpansionExpr *E) {
   PrintExpr(E->getPattern());
   OS << "...";

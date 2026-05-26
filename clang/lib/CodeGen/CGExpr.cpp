@@ -1730,6 +1730,11 @@ LValue CodeGenFunction::EmitLValueHelper(const Expr *E,
     return EmitCoyieldLValue(cast<CoyieldExpr>(E));
   case Expr::PackIndexingExprClass:
     return EmitLValue(cast<PackIndexingExpr>(E)->getSelectedExpr());
+  case Expr::CXXDecomposedObjectExprClass:
+    if (cast<CXXDecomposedObjectExpr>(E)->isPreDecompositionAddress())
+      llvm_unreachable("pre-decomposition address is not an lvalue");
+    return EmitLValue(cast<CXXDecomposedObjectExpr>(E)->getOperand(),
+                      IsKnownNonNull);
   case Expr::HLSLOutArgExprClass:
     llvm_unreachable("cannot emit a HLSL out argument directly");
   }

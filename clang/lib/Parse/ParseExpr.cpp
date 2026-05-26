@@ -2017,6 +2017,10 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
         IdentifierInfo *Id = Tok.getIdentifierInfo();
         SourceLocation Loc = ConsumeToken();
         Name.setIdentifier(Id, Loc);
+      } else if (Tok.is(tok::kw_this)) {
+        IdentifierInfo *Id = &PP.getIdentifierTable().get("this");
+        SourceLocation Loc = ConsumeToken();
+        Name.setIdentifier(Id, Loc);
       } else if (ParseUnqualifiedId(
                      SS, ObjectType, LHS.get() && LHS.get()->containsErrors(),
                      /*EnteringContext=*/false,

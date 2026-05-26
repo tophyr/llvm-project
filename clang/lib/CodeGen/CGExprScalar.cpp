@@ -478,6 +478,14 @@ public:
   Value *VisitSubstNonTypeTemplateParmExpr(SubstNonTypeTemplateParmExpr *E) {
     return Visit(E->getReplacement());
   }
+  Value *VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+    if (E->isPreDecompositionAddress()) {
+      Address Addr = CGF.EmitLValue(E->getOperand()).getAddress();
+      return CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+          Addr.getBasePointer(), CGF.ConvertType(E->getType()));
+    }
+    return Visit(E->getOperand());
+  }
   Value *VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     return Visit(GE->getResultExpr());
   }

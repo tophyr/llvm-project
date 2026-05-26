@@ -3678,6 +3678,14 @@ public:
     return SemaRef.ActOnRelocExpr(SemaRef.getCurScope(), Loc, Arg);
   }
 
+  ExprResult RebuildCXXDecomposedObjectExpr(const CXXDecomposedObjectExpr *Old,
+                                            Expr *Arg) {
+    return new (SemaRef.Context) CXXDecomposedObjectExpr(
+        Old->getType(), Arg, Old->getAccessLoc(), Old->getAccessKind(),
+        Old->getBaseTypeDecl(), Old->isDirectBaseSubobject(),
+        Old->isVirtualBaseSubobject());
+  }
+
   UnsignedOrNone
   ComputeSizeOfPackExprWithoutSubstitution(ArrayRef<TemplateArgument> PackArgs);
 
@@ -16072,6 +16080,20 @@ TreeTransform<Derived>::TransformCXXNoexceptExpr(CXXNoexceptExpr *E) {
     return E;
 
   return getDerived().RebuildCXXNoexceptExpr(E->getSourceRange(),SubExpr.get());
+}
+
+template<typename Derived>
+ExprResult
+TreeTransform<Derived>::TransformCXXDecomposedObjectExpr(
+    CXXDecomposedObjectExpr *E) {
+  ExprResult SubExpr = getDerived().TransformExpr(E->getOperand());
+  if (SubExpr.isInvalid())
+    return ExprError();
+
+  if (!getDerived().AlwaysRebuild() && SubExpr.get() == E->getOperand())
+    return E;
+
+  return getDerived().RebuildCXXDecomposedObjectExpr(E, SubExpr.get());
 }
 
 template<typename Derived>

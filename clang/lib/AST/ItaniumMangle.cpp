@@ -5389,6 +5389,10 @@ recurse:
     mangleExpression(cast<CXXNoexceptExpr>(E)->getOperand());
     break;
 
+  case Expr::CXXDecomposedObjectExprClass:
+    E = cast<CXXDecomposedObjectExpr>(E)->getOperand();
+    goto recurse;
+
   case Expr::CXXRelocExprClass:
     E = cast<CXXRelocExpr>(E)->getOperand();
     goto recurse;

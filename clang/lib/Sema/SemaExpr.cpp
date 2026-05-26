@@ -3251,6 +3251,14 @@ static void diagnoseUncapturableValueReferenceOrBinding(Sema &S,
                                                         SourceLocation loc,
                                                         ValueDecl *var);
 
+static bool isNamedDecomposedObject(const ValueDecl *VD) {
+  if (const auto *PVD = dyn_cast<ParmVarDecl>(VD))
+    return PVD->isRelocParameter() && PVD->getIdentifier() != nullptr;
+  if (const auto *Var = dyn_cast<VarDecl>(VD))
+    return Var->isRelocObject();
+  return false;
+}
+
 ExprResult Sema::BuildDeclarationNameExpr(
     const CXXScopeSpec &SS, const DeclarationNameInfo &NameInfo, NamedDecl *D,
     NamedDecl *FoundD, const TemplateArgumentListInfo *TemplateArgs,
@@ -3490,6 +3498,11 @@ ExprResult Sema::BuildDeclarationNameExpr(
   auto *E =
       BuildDeclRefExpr(VD, type, valueKind, NameInfo, &SS, FoundD,
                        /*FIXME: TemplateKWLoc*/ SourceLocation(), TemplateArgs);
+  if (E && valueKind == VK_LValue && isNamedDecomposedObject(VD))
+    return new (Context) CXXDecomposedObjectExpr(
+        type, E, NameInfo.getLoc(), CXXDecomposedObjectExpr::AK_WholeObject,
+        /*BaseTypeDecl=*/nullptr, /*IsDirectBase=*/false,
+        /*IsVirtualBase=*/false);
   // Clang AST consumers assume a DeclRefExpr refers to a valid decl. We
   // wrap a DeclRefExpr referring to an invalid decl with a dependent-type
   // RecoveryExpr to avoid follow-up semantic analysis (thus prevent bogus

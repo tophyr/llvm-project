@@ -124,6 +124,9 @@ public:
   ComplexPairTy VisitCoawaitExpr(CoawaitExpr *S) {
     return CGF.EmitCoawaitExpr(*S).getComplexVal();
   }
+  ComplexPairTy VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+    return Visit(E->getOperand());
+  }
   ComplexPairTy VisitCoyieldExpr(CoyieldExpr *S) {
     return CGF.EmitCoyieldExpr(*S).getComplexVal();
   }

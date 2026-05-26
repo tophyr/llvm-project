@@ -33,6 +33,7 @@
 #include "clang/AST/NonTrivialTypeVisitor.h"
 #include "clang/AST/OperationKinds.h"
 #include "clang/AST/RecordLayout.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/Type.h"
@@ -14084,6 +14085,154 @@ void Sema::CheckUnsequencedOperations(const Expr *E) {
 
 void Sema::CheckCompletedExpr(Expr *E, SourceLocation CheckLoc,
                               bool IsConstexpr) {
+  if (getLangOpts().CPlusPlus) {
+    struct DecomposedObjectUseChecker
+        : RecursiveASTVisitor<DecomposedObjectUseChecker> {
+      Sema &S;
+      SmallVector<const Stmt *, 8> Parents;
+      unsigned DecltypeDepth = 0;
+      unsigned TypeidDepth = 0;
+
+      explicit DecomposedObjectUseChecker(Sema &S) : S(S) {}
+
+      bool TraverseStmt(Stmt *Node) {
+        if (!Node)
+          return true;
+        Parents.push_back(Node);
+        bool Result = RecursiveASTVisitor::TraverseStmt(Node);
+        Parents.pop_back();
+        return Result;
+      }
+
+      bool TraverseTypeLoc(TypeLoc TL) {
+        if (TL.isNull())
+          return true;
+        bool IsDecltype = !TL.getAs<DecltypeTypeLoc>().isNull();
+        if (IsDecltype)
+          ++DecltypeDepth;
+        bool Result =
+            RecursiveASTVisitor<DecomposedObjectUseChecker>::TraverseTypeLoc(TL);
+        if (IsDecltype)
+          --DecltypeDepth;
+        return Result;
+      }
+
+      bool TraverseCXXTypeidExpr(CXXTypeidExpr *TIE) {
+        ++TypeidDepth;
+        bool Result = RecursiveASTVisitor<DecomposedObjectUseChecker>::
+            TraverseCXXTypeidExpr(TIE);
+        --TypeidDepth;
+        return Result;
+      }
+
+      const Stmt *getParent() const {
+        return Parents.size() >= 2 ? Parents[Parents.size() - 2] : nullptr;
+      }
+
+      const Stmt *getParentSkippingImplicit() const {
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const Stmt *Parent = Parents[I - 2];
+          if (!isa<ImplicitCastExpr, FullExpr, ExprWithCleanups, ConstantExpr>(
+                  Parent))
+            return Parent;
+        }
+        return nullptr;
+      }
+
+      bool isDirectUnevaluatedUse(const CXXDecomposedObjectExpr *DOE) const {
+        unsigned ParenDepth = 0;
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const Stmt *Parent = Parents[I - 2];
+          if (isa<ImplicitCastExpr, FullExpr, ExprWithCleanups, ConstantExpr>(
+                  Parent))
+            continue;
+
+          if (isa<ParenExpr>(Parent)) {
+            ++ParenDepth;
+            continue;
+          }
+
+          if (const auto *UETT = dyn_cast<UnaryExprOrTypeTraitExpr>(Parent))
+            return !UETT->isArgumentType() && ParenDepth <= 1;
+
+          if (const auto *TIE = dyn_cast<CXXTypeidExpr>(Parent))
+            return !TIE->isTypeOperand() && ParenDepth <= 1;
+
+          return false;
+        }
+        return false;
+      }
+
+      bool isDirectTypeidOperand(const CXXDecomposedObjectExpr *DOE) const {
+        unsigned ParenDepth = 0;
+        for (size_t I = Parents.size(); I >= 2; --I) {
+          const Stmt *Parent = Parents[I - 2];
+          if (isa<ImplicitCastExpr, FullExpr, ExprWithCleanups, ConstantExpr>(
+                  Parent))
+            continue;
+
+          if (isa<ParenExpr>(Parent)) {
+            ++ParenDepth;
+            continue;
+          }
+
+          return false;
+        }
+        return ParenDepth == 0;
+      }
+
+      bool VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *DOE) {
+        if (!DOE->isWholeObject())
+          return true;
+
+        const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+        const auto *VD =
+            DRE ? dyn_cast<ValueDecl>(DRE->getDecl()) : nullptr;
+        if (!VD)
+          return true;
+
+        if (DecltypeDepth)
+          return true;
+        if (TypeidDepth && isDirectTypeidOperand(DOE))
+          return true;
+
+        switch (S.currentEvaluationContext().ExprContext) {
+        case Sema::ExpressionEvaluationContextRecord::EK_Decltype:
+          return true;
+        case Sema::ExpressionEvaluationContextRecord::EK_Typeid:
+          if (isDirectTypeidOperand(DOE))
+            return true;
+          break;
+        default:
+          break;
+        }
+
+        if (isDirectUnevaluatedUse(DOE))
+          return true;
+
+        const Stmt *Parent = getParent();
+        if (isa_and_nonnull<RecoveryExpr>(Parent))
+          return true;
+        if (const auto *ME = dyn_cast_or_null<MemberExpr>(Parent))
+          if (ME->getBase()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (const auto *BO = dyn_cast_or_null<BinaryOperator>(Parent))
+          if ((BO->getOpcode() == BO_PtrMemD || BO->getOpcode() == BO_PtrMemI) &&
+              BO->getLHS()->IgnoreParenImpCasts() == DOE)
+            return true;
+        if (const auto *DOEParent =
+                dyn_cast_or_null<CXXDecomposedObjectExpr>(Parent))
+          if (DOEParent->getOperand()->IgnoreParenImpCasts() == DOE)
+            return true;
+
+        S.Diag(DOE->getExprLoc(), diag::err_decomposed_object_value_use) << VD;
+        return true;
+      }
+    } Checker(*this);
+
+    Checker.TraverseStmt(E);
+  }
+
   llvm::SaveAndRestore ConstantContext(isConstantEvaluatedOverride,
                                        IsConstexpr || isa<ConstantExpr>(E));
   CheckImplicitConversions(E, CheckLoc);

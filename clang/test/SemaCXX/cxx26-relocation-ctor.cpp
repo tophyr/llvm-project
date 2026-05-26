@@ -1,5 +1,9 @@
 // RUN: %clang_cc1 -std=c++26 -fsyntax-only -verify %s
 
+namespace std {
+class type_info;
+}
+
 struct Good {
   Good(Good reloc);
 };
@@ -59,6 +63,28 @@ void test_implicit_relocation_ctor() {
 struct DefaultedGoodMember {
   DefaultedGoodMember();
   DefaultedGoodMember(DefaultedGoodMember &&);
+};
+
+struct ExprParam {
+  int value;
+
+  void member();
+  static void static_member();
+
+  ExprParam(ExprParam src reloc) {
+    (void)src; // expected-error {{decomposed object 'src' cannot be used as a value}}
+    (void)src.value;
+    static_assert(__is_same(decltype(src.this), void *));
+    (void)src.this;
+    src.static_member();
+    src.member(); // expected-error {{non-static member 'member' cannot be used through decomposed object 'src'}}
+    (void)sizeof(src);
+    static_assert(__is_same(decltype(src), ExprParam));
+    (void)typeid(src);
+    (void)sizeof((src)); // expected-error {{decomposed object 'src' cannot be used as a value}}
+    using BadDecltype = decltype((src)); // expected-error {{decomposed object 'src' cannot be parenthesized in a decltype operand}}
+    (void)typeid((src)); // expected-error {{decomposed object 'src' cannot be used as a value}}
+  }
 };
 
 struct DefaultedGood {

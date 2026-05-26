@@ -458,6 +458,17 @@ void ASTStmtWriter::VisitCoyieldExpr(CoyieldExpr *E) {
   Code = serialization::EXPR_COYIELD;
 }
 
+void ASTStmtWriter::VisitCXXDecomposedObjectExpr(CXXDecomposedObjectExpr *E) {
+  VisitExpr(E);
+  Record.push_back(E->getAccessKind());
+  Record.push_back(E->isDirectBaseSubobject());
+  Record.push_back(E->isVirtualBaseSubobject());
+  Record.AddSourceLocation(E->getAccessLoc());
+  Record.AddDeclRef(E->getBaseTypeDecl());
+  Record.AddStmt(E->getOperand());
+  Code = serialization::EXPR_CXX_DECOMPOSED_OBJECT;
+}
+
 void ASTStmtWriter::VisitCXXRelocExpr(CXXRelocExpr *E) {
   VisitExpr(E);
   Record.AddSourceLocation(E->getRelocLoc());

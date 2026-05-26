@@ -8001,6 +8001,14 @@ def err_explicit_object_lambda_inaccessible_base : Error<
   "the type must derive publicly from the lambda">;
 def err_explicit_object_parameter_invalid: Error<
   "an explicit object parameter can only appear as the first parameter of a member function">;
+def err_decomposed_object_value_use : Error<
+  "decomposed object %0 cannot be used as a value">;
+def err_decomposed_object_nonstatic_member : Error<
+  "non-static member %0 cannot be used through decomposed object %1">;
+def err_decomposed_object_decltype_paren : Error<
+  "decomposed object %0 cannot be parenthesized in a decltype operand">;
+def err_decomposed_object_member_pointer_not_constant : Error<
+  "pointer-to-member access through decomposed object %0 requires a constant-evaluated member pointer">;
 
 def err_ref_qualifier_overload : Error<
   "cannot overload a member function %select{without a ref-qualifier|with "

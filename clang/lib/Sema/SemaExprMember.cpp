@@ -12,6 +12,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/CXXInheritance.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/Lex/Preprocessor.h"
@@ -26,6 +27,108 @@ using namespace clang;
 using namespace sema;
 
 typedef llvm::SmallPtrSet<const CXXRecordDecl*, 4> BaseSet;
+
+static CXXDecomposedObjectExpr *getDecomposedObjectBase(Expr *E) {
+  return dyn_cast<CXXDecomposedObjectExpr>(E->IgnoreParenImpCasts());
+}
+
+static ExprResult BuildDecomposedBaseSubobjectExpr(
+    Sema &S, Expr *BaseExpr, const DeclarationNameInfo &NameInfo) {
+  auto *DOE = getDecomposedObjectBase(BaseExpr);
+  if (!DOE || !DOE->isWholeObject())
+    return ExprEmpty();
+
+  auto *BaseRecord = BaseExpr->getType()->getAsCXXRecordDecl();
+  auto *II = NameInfo.getName().getAsIdentifierInfo();
+  if (!BaseRecord || !II)
+    return ExprEmpty();
+
+  CXXBasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/true,
+                     /*DetectVirtual=*/false);
+  if (!BaseRecord->lookupInBases(
+          [II](const CXXBaseSpecifier *Specifier, CXXBasePath &) {
+            if (const auto *RD = Specifier->getType()->getAsCXXRecordDecl())
+              return RD->getIdentifier() == II;
+            return false;
+          },
+          Paths))
+    return ExprEmpty();
+
+  QualType TargetType;
+  for (const CXXBasePath &Path : Paths) {
+    const auto *TargetBase = Path.back().Base;
+    if (TargetType.isNull()) {
+      TargetType = TargetBase->getType();
+      continue;
+    }
+    if (!S.Context.hasSameUnqualifiedType(TargetType, TargetBase->getType())) {
+      S.Diag(NameInfo.getLoc(), diag::err_ambiguous_derived_to_base_conv)
+          << BaseExpr->getType() << TargetBase->getType()
+          << S.getAmbiguousPathsDisplayString(Paths) << BaseExpr->getSourceRange()
+          << NameInfo.getName();
+      return ExprError();
+    }
+  }
+
+  if (Paths.isAmbiguous(S.Context.getCanonicalType(TargetType).getUnqualifiedType())) {
+    S.Diag(NameInfo.getLoc(), diag::err_ambiguous_derived_to_base_conv)
+        << BaseExpr->getType() << TargetType << S.getAmbiguousPathsDisplayString(Paths)
+        << BaseExpr->getSourceRange() << NameInfo.getName();
+    return ExprError();
+  }
+
+  const CXXBasePath &Path = Paths.front();
+  switch (S.CheckBaseClassAccess(NameInfo.getLoc(), TargetType, BaseExpr->getType(),
+                                 Path, diag::err_upcast_to_inaccessible_base)) {
+  case Sema::AR_inaccessible:
+    return ExprError();
+  case Sema::AR_accessible:
+  case Sema::AR_dependent:
+  case Sema::AR_delayed:
+    break;
+  }
+
+  bool IsDirectBase = Path.size() == 1;
+  bool IsVirtualBase = llvm::any_of(
+      Path, [](const CXXBasePathElement &Element) { return Element.Base->isVirtual(); });
+  QualType ResultType =
+      S.Context.getQualifiedType(TargetType.getUnqualifiedType(),
+                                 BaseExpr->getType().getQualifiers());
+  return new (S.Context) CXXDecomposedObjectExpr(
+      ResultType, BaseExpr, NameInfo.getLoc(),
+      CXXDecomposedObjectExpr::AK_BaseSubobject,
+      ResultType->getAsCXXRecordDecl(), IsDirectBase, IsVirtualBase);
+}
+
+static ExprResult BuildDecomposedOwningBaseExpr(Sema &S, Expr *BaseExpr,
+                                                const CXXRecordDecl *Owner,
+                                                SourceLocation Loc) {
+  if (!Owner || !Owner->getIdentifier())
+    return ExprEmpty();
+
+  DeclarationNameInfo NameInfo(DeclarationName(Owner->getIdentifier()), Loc);
+  return BuildDecomposedBaseSubobjectExpr(S, BaseExpr, NameInfo);
+}
+
+static ExprResult BuildDecomposedObjectThisExpr(
+    Sema &S, Expr *BaseExpr, const DeclarationNameInfo &NameInfo) {
+  auto *DOE = getDecomposedObjectBase(BaseExpr);
+  if (!DOE)
+    return ExprEmpty();
+
+  auto *II = NameInfo.getName().getAsIdentifierInfo();
+  if (!II || !II->isStr("this"))
+    return ExprEmpty();
+
+  QualType VoidTy = S.Context.VoidTy;
+  QualType ResultType = S.Context.getPointerType(
+      S.Context.getQualifiedType(VoidTy, BaseExpr->getType().getQualifiers()));
+  return new (S.Context) CXXDecomposedObjectExpr(
+      ResultType, BaseExpr, NameInfo.getLoc(),
+      CXXDecomposedObjectExpr::AK_PreDecompositionAddress,
+      /*BaseTypeDecl=*/nullptr, /*IsDirectBase=*/false,
+      /*IsVirtualBase=*/false);
+}
 
 /// Determines if the given class is provably not derived from all of
 /// the prospective base classes.
@@ -1046,6 +1149,19 @@ Sema::BuildMemberReferenceExpr(Expr *BaseExpr, QualType BaseExprType,
     return ExprError();
 
   if (FieldDecl *FD = dyn_cast<FieldDecl>(MemberDecl)) {
+    if (const auto *DOE = getDecomposedObjectBase(BaseExpr);
+        DOE && DOE->isWholeObject()) {
+      const auto *BaseRecord = cast<CXXRecordDecl>(computeDeclContext(BaseType));
+      if (FD->getParent()->getCanonicalDecl() != BaseRecord->getCanonicalDecl()) {
+        ExprResult OwnerBase = BuildDecomposedOwningBaseExpr(
+            *this, BaseExpr, dyn_cast<CXXRecordDecl>(FD->getParent()),
+            MemberNameInfo.getLoc());
+        if (OwnerBase.isInvalid())
+          return ExprError();
+        if (OwnerBase.isUsable())
+          BaseExpr = OwnerBase.get();
+      }
+    }
     if (ConvertBaseExprToGLValue())
       return ExprError();
     return BuildFieldReferenceExpr(BaseExpr, IsArrow, OpLoc, SS, FD, FoundDecl,
@@ -1084,6 +1200,16 @@ Sema::BuildMemberReferenceExpr(Expr *BaseExpr, QualType BaseExprType,
   }
 
   if (CXXMethodDecl *MemberFn = dyn_cast<CXXMethodDecl>(MemberDecl)) {
+    if (MemberFn->isInstance())
+      if (const auto *DOE = getDecomposedObjectBase(BaseExpr);
+          DOE && DOE->isWholeObject()) {
+        const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+        assert(DRE && "whole-object decomposition must wrap a DeclRefExpr");
+        Diag(MemberNameInfo.getLoc(), diag::err_decomposed_object_nonstatic_member)
+            << MemberFn
+            << cast<ValueDecl>(DRE->getDecl());
+        return ExprError();
+      }
     ExprValueKind valueKind;
     QualType type;
     if (MemberFn->isInstance()) {
@@ -1148,6 +1274,31 @@ Sema::BuildMemberReferenceExpr(Expr *BaseExpr, QualType BaseExprType,
   }
 
   // We found something that we didn't expect. Complain.
+  if (auto *TD = dyn_cast<TypeDecl>(MemberDecl))
+    if (const auto *DOE = getDecomposedObjectBase(BaseExpr);
+        DOE && DOE->isWholeObject()) {
+      const auto *BaseRecord = BaseType->getAsCXXRecordDecl();
+      const auto *TargetRecord =
+          Context.getTypeDeclType(TD)->getAsCXXRecordDecl();
+      if (BaseRecord && TargetRecord) {
+        QualType TargetType = Context.getTypeDeclType(TargetRecord);
+        CXXCastPath BasePath;
+        if (!CheckDerivedToBaseConversion(BaseType, TargetType, MemberLoc,
+                                         BaseExpr->getSourceRange(), &BasePath,
+                                         /*IgnoreAccess=*/false)) {
+          bool IsDirectBase = BasePath.size() == 1;
+          bool IsVirtualBase = llvm::any_of(
+              BasePath, [](const CXXBaseSpecifier *BS) { return BS->isVirtual(); });
+          QualType ResultType =
+              Context.getQualifiedType(TargetType, BaseType.getQualifiers());
+          return new (Context) CXXDecomposedObjectExpr(
+              ResultType, BaseExpr, MemberLoc,
+              CXXDecomposedObjectExpr::AK_BaseSubobject, TD, IsDirectBase,
+              IsVirtualBase);
+        }
+        return ExprError();
+      }
+    }
   if (isa<TypeDecl>(MemberDecl))
     Diag(MemberLoc, diag::err_typecheck_member_reference_type)
       << MemberName << BaseType << int(IsArrow);
@@ -1712,6 +1863,16 @@ ExprResult Sema::ActOnMemberAccessExpr(Scope *S, Expr *Base,
   ExprResult Result = MaybeConvertParenListExprToParenExpr(S, Base);
   if (Result.isInvalid()) return ExprError();
   Base = Result.get();
+
+  if (ExprResult DecomposedThis = BuildDecomposedObjectThisExpr(
+          *this, Base, NameInfo);
+      DecomposedThis.isInvalid() || DecomposedThis.isUsable())
+    return DecomposedThis;
+
+  if (ExprResult DecomposedBase = BuildDecomposedBaseSubobjectExpr(
+          *this, Base, NameInfo);
+      DecomposedBase.isInvalid() || DecomposedBase.isUsable())
+    return DecomposedBase;
 
   ActOnMemberAccessExtraArgs ExtraArgs = {S, Id, ObjCImpDecl};
   ExprResult Res = BuildMemberReferenceExpr(
