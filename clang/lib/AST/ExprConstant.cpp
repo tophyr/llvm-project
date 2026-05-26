@@ -10128,6 +10128,22 @@ bool PointerExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
     return HandleOperatorNewCall(Info, E, Result);
   case Builtin::BI__builtin_launder:
     return evaluatePointer(E->getArg(0), Result);
+  case Builtin::BI__builtin_construct_at_reloc: {
+    if (!evaluatePointer(E->getArg(0), Result))
+      return false;
+
+    LValue Src;
+    if (!EvaluatePointer(E->getArg(1), Src, Info))
+      return false;
+
+    APValue Value;
+    QualType ObjectTy = E->getArg(0)->getType()->getPointeeType();
+    if (!handleLValueToRValueConversion(Info, E, ObjectTy, Src, Value))
+      return false;
+    if (!handleAssignment(Info, E, Result, ObjectTy, Value))
+      return false;
+    return true;
+  }
   case Builtin::BIstrchr:
   case Builtin::BIwcschr:
   case Builtin::BImemchr:

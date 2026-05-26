@@ -3632,6 +3632,27 @@ static bool hasIdenticalRelocParameterAttrs(const FunctionDecl *A,
                     });
 }
 
+static bool isPaperRelocConstructAtOverload(const FunctionDecl *FD) {
+  if (!FD || !FD->isInStdNamespace() || !FD->getIdentifier() ||
+      !FD->getIdentifier()->isStr("construct_at") || FD->getNumParams() != 2)
+    return false;
+
+  QualType ReturnTy = FD->getReturnType().getNonReferenceType();
+  const auto *ReturnPtr = ReturnTy->getAs<PointerType>();
+  const auto *FirstPtr = FD->getParamDecl(0)->getType()->getAs<PointerType>();
+  if (!ReturnPtr || !FirstPtr)
+    return false;
+
+  QualType ElementTy = FirstPtr->getPointeeType();
+  QualType SecondTy = FD->getParamDecl(1)->getType();
+  if (SecondTy->isReferenceType())
+    return false;
+
+  ASTContext &Context = FD->getASTContext();
+  return Context.hasSameType(ReturnTy, FD->getParamDecl(0)->getType()) &&
+         Context.hasSameType(ElementTy, SecondTy);
+}
+
 /// If necessary, adjust the semantic declaration context for a qualified
 /// declaration to name the correct inline namespace within the qualifier.
 static void adjustDeclContextForDeclaratorDecl(DeclaratorDecl *NewD,
@@ -10531,6 +10552,9 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
 
   // Finally, we know we have the right number of parameters, install them.
   NewFD->setParams(Params);
+
+  if (getLangOpts().CPlusPlus26 && isPaperRelocConstructAtOverload(NewFD))
+    NewFD->getParamDecl(1)->setIsRelocParameter(true);
 
   if (getLangOpts().CPlusPlus) {
     for (unsigned I = 0, E = Params.size(); I != E; ++I) {

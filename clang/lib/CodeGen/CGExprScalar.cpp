@@ -490,6 +490,17 @@ public:
     }
     return Visit(E->getOperand());
   }
+  Value *VisitCXXRelocateExpr(CXXRelocateExpr *E) {
+    Address Temp = CGF.CreateMemTemp(E->getType(), "reloc.result");
+    CGF.EmitCXXRelocateExpr(
+        E, AggValueSlot::forAddr(Temp, E->getType().getQualifiers(),
+                                 AggValueSlot::IsNotDestructed,
+                                 AggValueSlot::DoesNotNeedGCBarriers,
+                                 AggValueSlot::IsNotAliased,
+                                 AggValueSlot::MayOverlap));
+    return CGF.EmitLoadOfScalar(Temp, /*Volatile=*/false, E->getType(),
+                                E->getExprLoc());
+  }
   Value *VisitCXXImplicitDecompositionExpr(CXXImplicitDecompositionExpr *E) {
     CGF.EnterImplicitDecomposition(E);
     Value *Result = Visit(E->getOperand());

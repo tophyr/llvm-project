@@ -12841,6 +12841,12 @@ def warn_cast_discards_cfi_unchecked_callee
 def err_builtin_launder_invalid_arg : Error<
   "%select{non-pointer|function pointer|void pointer}0 argument to "
   "'__builtin_launder' is not allowed">;
+def err_builtin_relocate_invalid_arg : Error<
+  "%select{non-pointer|function pointer|void pointer}0 argument to "
+  "'%1' is not allowed">;
+def err_builtin_relocate_no_eligible_ctor : Error<
+  "'%0' cannot relocate an object of type %1 because it has no eligible "
+  "relocation, move, or copy constructor">;
 def err_builtin_assume_aligned_invalid_arg : Error<
   "non-pointer argument to '__builtin_assume_aligned' is not allowed">;
 

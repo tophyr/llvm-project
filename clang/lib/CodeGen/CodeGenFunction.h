@@ -3482,6 +3482,10 @@ public:
   void DeactivateCleanupForRelocatedDecl(const ValueDecl *D);
   void EmitRelocExprCleanupDeactivation(const CXXRelocExpr *E);
   void EmitCXXRelocateExpr(const CXXRelocateExpr *E, AggValueSlot Dest);
+  void EmitRelocateToAddress(QualType ResultTy, Address DestAddr,
+                             llvm::Value *SrcPtr, QualType SrcPtrTy,
+                             bool Reclaim,
+                             const FunctionDecl *OperatorDelete = nullptr);
   void EnterImplicitDecomposition(const CXXImplicitDecompositionExpr *E);
   void LeaveImplicitDecomposition(const CXXImplicitDecompositionExpr *E);
   const Expr *

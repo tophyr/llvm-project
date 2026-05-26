@@ -15,6 +15,13 @@ struct Track {
   ~Track() = default;
 };
 
+namespace std {
+template <class T>
+constexpr T *construct_at(T *p, T src) {
+  return __builtin_construct_at_reloc(p, src.this);
+}
+}
+
 void by_value_arg(Track src) {}
 
 void local() {
@@ -35,6 +42,17 @@ void call_by_value(Track src) {
 // CHECK: call void @_ZN5TrackC1ES_
 // CHECK-NOT: call void @_ZN5TrackC1ES_
 // CHECK: call void @_Z12by_value_arg5Track
+// CHECK: ret void
+
+void call_construct_at() {
+  Track src;
+  alignas(Track) unsigned char storage[sizeof(Track)];
+  (void)std::construct_at(reinterpret_cast<Track *>(storage), reloc src);
+}
+
+// CHECK-LABEL: define{{.*}} @_Z17call_construct_atv(
+// CHECK: call void @_ZN5TrackC1ES_
+// CHECK-NOT: call void @_ZN5TrackC1ES_
 // CHECK: ret void
 
 void param(Track src) {

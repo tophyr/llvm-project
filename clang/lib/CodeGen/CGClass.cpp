@@ -2272,15 +2272,9 @@ void CodeGenFunction::emitVirtualSlicingFunctionBody(FunctionArgList &Args) {
   SliceScope.ForceCleanup();
 }
 
-void CodeGenFunction::EmitCXXRelocateExpr(const CXXRelocateExpr *E,
-                                          AggValueSlot Dest) {
-  if (const auto *VD = getWholeObjectRelocatedDecl(E->getOperand()))
-    DeactivateCleanupForRelocatedDecl(VD);
-
-  QualType ResultTy = E->getType();
-  Address DestAddr = Dest.getAddress();
-  llvm::Value *SrcPtr = EmitScalarExpr(E->getOperand());
-  QualType SrcPtrTy = E->getOperand()->getType();
+void CodeGenFunction::EmitRelocateToAddress(
+    QualType ResultTy, Address DestAddr, llvm::Value *SrcPtr, QualType SrcPtrTy,
+    bool Reclaim, const FunctionDecl *OperatorDelete) {
   QualType SrcTy = SrcPtrTy->getPointeeType();
   Address Src = Address(SrcPtr, ConvertTypeForMem(SrcTy),
                         getContext().getTypeAlignInChars(SrcTy));
@@ -2296,7 +2290,7 @@ void CodeGenFunction::EmitCXXRelocateExpr(const CXXRelocateExpr *E,
                         DestAddr.emitRawPointer(*this),
                         ConvertType(Slice->getParamDecl(1)->getType()))),
                     Slice->getParamDecl(1)->getType());
-      SliceArgs.add(RValue::get(Builder.getInt1(E->isReclaiming())),
+      SliceArgs.add(RValue::get(Builder.getInt1(Reclaim)),
                     Slice->getParamDecl(2)->getType());
       auto &FnInfo = CGM.getTypes().arrangeCXXMethodDeclaration(Slice);
       auto *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
@@ -2332,10 +2326,10 @@ void CodeGenFunction::EmitCXXRelocateExpr(const CXXRelocateExpr *E,
 
     const CXXDestructorDecl *Dtor = RD->getDestructor();
     RunCleanupsScope Scope(*this);
-    if (E->isReclaiming())
+    if (Reclaim)
       EHStack.pushCleanup<DeleteVirtualSliceStorage>(
-          NormalAndEHCleanup, Builder.getInt1(true), SrcPtr,
-          E->getOperatorDelete(), ResultTy);
+          NormalAndEHCleanup, Builder.getInt1(true), SrcPtr, OperatorDelete,
+          ResultTy);
     if (!Ctor->isRelocationConstructor())
       EHStack.pushCleanup<DestroyVirtualSliceObject>(NormalAndEHCleanup, Src,
                                                     ResultTy, Dtor);
@@ -2356,18 +2350,29 @@ void CodeGenFunction::EmitCXXRelocateExpr(const CXXRelocateExpr *E,
 
   if (ResultTy->isAnyComplexType()) {
     ComplexPairTy Value = EmitLoadOfComplex(MakeAddrLValue(Src, SrcTy),
-                                            E->getExprLoc());
+                                            SourceLocation());
     EmitStoreOfComplex(Value, MakeAddrLValue(DestAddr, ResultTy),
                        /*isInit=*/true);
   } else {
     llvm::Value *Value =
-        EmitLoadOfScalar(Src, /*Volatile=*/false, SrcTy, E->getExprLoc());
+        EmitLoadOfScalar(Src, /*Volatile=*/false, SrcTy, SourceLocation());
     EmitStoreOfScalar(Value, MakeAddrLValue(DestAddr, ResultTy),
                       /*isInit=*/true);
   }
 
-  if (E->isReclaiming())
-    EmitDeleteCall(E->getOperatorDelete(), SrcPtr, ResultTy);
+  if (Reclaim)
+    EmitDeleteCall(OperatorDelete, SrcPtr, ResultTy);
+}
+
+void CodeGenFunction::EmitCXXRelocateExpr(const CXXRelocateExpr *E,
+                                          AggValueSlot Dest) {
+  if (const auto *VD = getWholeObjectRelocatedDecl(E->getOperand()))
+    DeactivateCleanupForRelocatedDecl(VD);
+
+  EmitRelocateToAddress(E->getType(), Dest.getAddress(),
+                        EmitScalarExpr(E->getOperand()),
+                        E->getOperand()->getType(), E->isReclaiming(),
+                        E->getOperatorDelete());
 }
 
 /// EmitCXXAggrConstructorCall - Emit a loop to call a particular

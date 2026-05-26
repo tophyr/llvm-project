@@ -69,25 +69,48 @@ static const CXXDecomposedObjectExpr *getWholeDecomposedArg(Expr *Arg) {
   return DOE && DOE->isWholeObject() ? DOE : nullptr;
 }
 
+static bool isRelocArgument(Expr *Arg) {
+  Arg = Arg->IgnoreParenImpCasts();
+  while (true) {
+    if (isa<CXXRelocExpr>(Arg))
+      return true;
+    if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(Arg)) {
+      Arg = MTE->getSubExpr()->IgnoreParenImpCasts();
+      continue;
+    }
+    if (const auto *BTE = dyn_cast<CXXBindTemporaryExpr>(Arg)) {
+      Arg = const_cast<Expr *>(BTE->getSubExpr()->IgnoreParenImpCasts());
+      continue;
+    }
+    return false;
+  }
+}
+
 static Expr *getOverloadArgForParameter(Sema &S, const FunctionDecl *Function,
                                         unsigned ParamIndex, Expr *Arg) {
   if (!Function || ParamIndex >= Function->getNumParams())
     return Arg;
 
+  const auto *Param = Function->getParamDecl(ParamIndex);
+  if (Param->isRelocParameter()) {
+    const auto *DOE = getWholeDecomposedArg(Arg);
+    if (DOE)
+      return new (S.Context) CXXRelocExpr(Arg->getType(), Arg,
+                                          Arg->getExprLoc());
+    if (isa<CXXRelocExpr>(Arg->IgnoreParenImpCasts()))
+      return Arg;
+    return nullptr;
+  }
+
   const auto *DOE = getWholeDecomposedArg(Arg);
   if (!DOE)
     return Arg;
 
-  const auto *Param = Function->getParamDecl(ParamIndex);
-  if (!Param->isRelocParameter()) {
-    if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
-        DRE && isa<BindingDecl>(DRE->getDecl()) &&
-        cast<BindingDecl>(DRE->getDecl())->isRelocDecompositionBinding())
-      return const_cast<Expr *>(DOE->getOperand());
-    return nullptr;
-  }
-
-  return new (S.Context) CXXRelocExpr(Arg->getType(), Arg, Arg->getExprLoc());
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(DOE->getOperand());
+      DRE && isa<BindingDecl>(DRE->getDecl()) &&
+      cast<BindingDecl>(DRE->getDecl())->isRelocDecompositionBinding())
+    return const_cast<Expr *>(DOE->getOperand());
+  return nullptr;
 }
 
 /// A convenience routine for creating a decayed reference to a function.
@@ -278,6 +301,7 @@ void StandardConversionSequence::setAsIdentityConversion() {
   BindsToFunctionLvalue = false;
   BindsToRvalue = false;
   BindsToPrvalue = false;
+  FromRelocExpr = false;
   BindsImplicitObjectArgumentWithoutRefQualifier = false;
   ObjCLifetimeConversionBinding = false;
   FromBracedInitList = false;
@@ -1842,6 +1866,7 @@ TryImplicitConversion(Sema &S, Expr *From, QualType ToType,
     ICS.Standard.setAsIdentityConversion();
     ICS.Standard.setFromType(FromType);
     ICS.Standard.setAllToTypes(ToType);
+    ICS.Standard.FromRelocExpr = isRelocArgument(From);
 
     // We don't actually check at this point whether there is a valid
     // copy/move constructor, since overloading just assumes that it
@@ -4532,7 +4557,7 @@ static bool isBetterPrvalueValueBinding(const LangOptions &LangOpts,
     return false;
 
   return !SCS1.ReferenceBinding && SCS2.ReferenceBinding &&
-         SCS2.BindsToPrvalue &&
+         (SCS2.BindsToPrvalue || SCS2.FromRelocExpr) &&
          !SCS2.BindsImplicitObjectArgumentWithoutRefQualifier;
 }
 
@@ -5368,6 +5393,7 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.Standard.BindsToFunctionLvalue = T2->isFunctionType();
     ICS.Standard.BindsToRvalue = InitCategory.isRValue();
     ICS.Standard.BindsToPrvalue = InitCategory.isPRValue();
+    ICS.Standard.FromRelocExpr = isRelocArgument(Init);
     ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.Standard.ObjCLifetimeConversionBinding =
         (RefConv & Sema::ReferenceConversions::ObjCLifetime) != 0;
@@ -5547,6 +5573,7 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     ICS.Standard.BindsToFunctionLvalue = false;
     ICS.Standard.BindsToRvalue = true;
     ICS.Standard.BindsToPrvalue = InitCategory.isPRValue();
+    ICS.Standard.FromRelocExpr = isRelocArgument(Init);
     ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier = false;
     ICS.Standard.ObjCLifetimeConversionBinding = false;
   } else if (ICS.isUserDefined()) {
@@ -6099,6 +6126,7 @@ static ImplicitConversionSequence TryObjectArgumentInitialization(
   ICS.Standard.BindsToFunctionLvalue = false;
   ICS.Standard.BindsToRvalue = FromClassification.isRValue();
   ICS.Standard.BindsToPrvalue = FromClassification.isPRValue();
+  ICS.Standard.FromRelocExpr = false;
   ICS.Standard.FromBracedInitList = false;
   ICS.Standard.BindsImplicitObjectArgumentWithoutRefQualifier
     = (Method->getRefQualifier() == RQ_None);
@@ -7221,6 +7249,9 @@ void Sema::AddOverloadCandidate(
     //   of a class object to an object of its class type.
     QualType ClassType = Context.getTypeDeclType(Constructor->getParent());
     if (Args.size() == 1 && Constructor->isSpecializationCopyingObject() &&
+        !(isRelocGlvalueArgument(Args[0]) &&
+          Constructor->getNumParams() != 0 &&
+          Constructor->getParamDecl(0)->isRelocParameter()) &&
         (Context.hasSameUnqualifiedType(ClassType, Args[0]->getType()) ||
          IsDerivedFrom(Args[0]->getBeginLoc(), Args[0]->getType(),
                        ClassType))) {
@@ -8310,15 +8341,6 @@ bool Sema::CheckNonDependentConversions(
         Conversions[ConvIdx].setBad(BadConversionSequence::no_conversion,
                                     Args[I], ParamType);
         return true;
-      }
-      if (isa<CXXRelocExpr>(Arg->IgnoreParenImpCasts()) &&
-          !ParamType->isReferenceType() && ParamType->isRecordType() &&
-          Context.hasSameUnqualifiedType(Arg->getType(), ParamType)) {
-        Conversions[ConvIdx].setStandard();
-        Conversions[ConvIdx].Standard.setAsIdentityConversion();
-        Conversions[ConvIdx].Standard.setFromType(Arg->getType());
-        Conversions[ConvIdx].Standard.setAllToTypes(ParamType);
-        continue;
       }
       Conversions[ConvIdx] = TryCopyInitialization(
           *this, Arg, ParamType, UserConversionFlag.SuppressUserConversions,

@@ -66,6 +66,31 @@ llvm::cl::opt<bool> ClSanitizeGuardChecks(
 
 } // namespace clang
 
+static bool isPaperRelocConstructAtOverload(const FunctionDecl *FD,
+                                            ASTContext &Ctx) {
+  if (!FD || FD->getIdentifier() == nullptr ||
+      FD->getIdentifier()->getName() != "construct_at" || FD->getNumParams() != 2)
+    return false;
+  const NamespaceDecl *NS = dyn_cast<NamespaceDecl>(FD->getDeclContext());
+  if (!NS || !NS->isStdNamespace())
+    return false;
+  QualType ReturnTy = FD->getReturnType();
+  QualType DestTy = FD->getParamDecl(0)->getType();
+  QualType SrcTy = FD->getParamDecl(1)->getType();
+  if (!ReturnTy->isPointerType() || !DestTy->isPointerType() ||
+      SrcTy->isReferenceType())
+    return false;
+  return ReturnTy == DestTy &&
+         Ctx.hasSameUnqualifiedType(DestTy->getPointeeType(), SrcTy);
+}
+
+static const ValueDecl *getWholeObjectRelocatedDecl(const Expr *E) {
+  E = E->IgnoreParenImpCasts();
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
+    return dyn_cast<ValueDecl>(DRE->getDecl());
+  return nullptr;
+}
+
 //===--------------------------------------------------------------------===//
 //                        Defines for metadata
 //===--------------------------------------------------------------------===//
@@ -6123,6 +6148,21 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
 
   if (const auto *CE = dyn_cast<CUDAKernelCallExpr>(E))
     return EmitCUDAKernelCallExpr(CE, ReturnValue, CallOrInvoke);
+
+  if (const auto *FD = E->getDirectCallee();
+      isPaperRelocConstructAtOverload(FD, getContext())) {
+    if (const auto *RE =
+            dyn_cast<CXXRelocateExpr>(E->getArg(1)->IgnoreParenImpCasts())) {
+      if (const auto *VD = getWholeObjectRelocatedDecl(RE->getOperand()))
+        DeactivateCleanupForRelocatedDecl(VD);
+      Address Dest = EmitPointerWithAlignment(E->getArg(0));
+      EmitRelocateToAddress(FD->getParamDecl(1)->getType(), Dest,
+                            EmitScalarExpr(RE->getOperand()),
+                            RE->getOperand()->getType(),
+                            /*Reclaim=*/false);
+      return RValue::get(Dest, *this);
+    }
+  }
 
   // A CXXOperatorCallExpr is created even for explicit object methods, but
   // these should be treated like static function call.
